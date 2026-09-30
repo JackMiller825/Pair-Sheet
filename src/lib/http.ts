@@ -12,9 +12,9 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-export async function fetchJson(url: string, init?: RequestInit, timeout = 25000): Promise<unknown> {
+export async function fetchJson(url: string, init?: RequestInit, timeout = 25000, attempts = 2): Promise<unknown> {
   let last: Error | null = null
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       const response = await fetch(url, {
         ...init,

@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { ArrowDown, ArrowUp, Download, ExternalLink, Loader2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -27,6 +27,30 @@ type SortKey =
   | "fundedBy"
 
 const CHAINS = supportedChainNames().join(", ")
+const FUNDER_BATCH = 6
+const FUNDER_PARALLEL = 2
+const FUNDER_PASSES = 4
+const FUNDER_RETRY_MS = 6000
+
+type FunderMap = Record<string, { address: string; label: string }>
+
+async function readJson<T>(response: Response, fallback: string): Promise<T & { error?: string }> {
+  const text = await response.text()
+  try {
+    return JSON.parse(text) as T & { error?: string }
+  } catch {
+    if (response.status === 504 || response.status === 408) {
+      throw new Error("The server took too long to answer. Try again in a moment.")
+    }
+    throw new Error(`${fallback} The server answered with status ${response.status}.`)
+  }
+}
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const groups: T[][] = []
+  for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size))
+  return groups
+}
 
 export function Exporter() {
   const [url, setUrl] = useState(EXAMPLE_URL)
@@ -43,9 +67,64 @@ export function Exporter() {
   const [sortKey, setSortKey] = useState<SortKey>("timestamp")
   const [sortDesc, setSortDesc] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [funding, setFunding] = useState<{ done: number; total: number } | null>(null)
+  const run = useRef(0)
+
+  async function lookUpFunders(chainId: string, makers: string[], token: number) {
+    let pending = [...new Set(makers.map((maker) => maker.toLowerCase()).filter(Boolean))]
+    const total = pending.length
+    let done = 0
+    if (total === 0) return
+    setFunding({ done, total })
+
+    for (let pass = 0; pass < FUNDER_PASSES && pending.length > 0 && run.current === token; pass += 1) {
+      if (pass > 0) await new Promise((resolve) => setTimeout(resolve, FUNDER_RETRY_MS * pass))
+      const batches = chunk(pending, FUNDER_BATCH)
+      const retry: string[] = []
+      let next = 0
+      const worker = async () => {
+        while (next < batches.length && run.current === token) {
+          const batch = batches[next]
+          next += 1
+          try {
+            const response: Response = await fetch("/api/funders", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ chain: chainId, makers: batch }),
+            })
+            const body = await readJson<{ funders?: FunderMap; failed?: string[] }>(response, "Could not look up funders.")
+            if (!response.ok) throw new Error(body.error || "Could not look up funders.")
+            const found = body.funders ?? {}
+            const failed = new Set(body.failed ?? [])
+            if (run.current !== token) return
+            setTrades((current) =>
+              current.map((trade) => {
+                const match = found[trade.maker.toLowerCase()]
+                return match && !trade.fundedByAddress
+                  ? { ...trade, fundedBy: match.label, fundedByAddress: match.address }
+                  : trade
+              }),
+            )
+            for (const maker of batch) {
+              if (failed.has(maker)) retry.push(maker)
+              else done += 1
+            }
+          } catch {
+            retry.push(...batch)
+          }
+          if (run.current === token) setFunding({ done, total })
+        }
+      }
+      await Promise.all(Array.from({ length: FUNDER_PARALLEL }, worker))
+      pending = retry
+    }
+    if (run.current === token) setFunding(null)
+  }
 
   async function load(target = url) {
     const trimmed = target.trim()
+    run.current += 1
+    const token = run.current
     setPhase("loading")
     setError(null)
     setWarning(null)
@@ -53,22 +132,26 @@ export function Exporter() {
     setPool(null)
     setTrades([])
     setFunder("")
-    setProgress("Reading swaps and who funded each wallet…")
+    setFunding(null)
+    setProgress("Reading swaps from the chain…")
 
     try {
       let cursor: string | null = null
       const loaded: Trade[] = []
       const seen = new Set<string>()
+      let chainId = ""
       do {
-        const response = await fetch("/api/swaps", {
+        const response: Response = await fetch("/api/swaps", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ url: trimmed, cursor }),
         })
-        const body = (await response.json()) as SwapsResponse & { error?: string }
+        const body: SwapsResponse & { error?: string } = await readJson<SwapsResponse>(response, "Could not load swaps.")
+        if (run.current !== token) return
         if (!response.ok) {
-          throw new Error(body.error || "Could not load swaps.")
+          throw new Error(body.error || `Could not load swaps. The server answered with status ${response.status}.`)
         }
+        chainId = body.pool.chainId
         setPool(body.pool)
         if (body.warning) setWarning(body.warning)
         for (const trade of body.trades) {
@@ -89,7 +172,13 @@ export function Exporter() {
         }
       } while (cursor)
       setPhase("done")
+      void lookUpFunders(
+        chainId,
+        loaded.map((trade) => trade.maker),
+        token,
+      )
     } catch (loadError) {
+      if (run.current !== token) return
       setPhase("error")
       setError(loadError instanceof Error ? loadError.message : "Could not load swaps.")
     }
@@ -217,6 +306,10 @@ export function Exporter() {
         <p className="text-sm text-muted-foreground" role="status">
           {progress}
         </p>
+      ) : funding ? (
+        <p className="text-sm text-muted-foreground" role="status">
+          Finding who funded each wallet: {funding.done.toLocaleString("en-US")} of {funding.total.toLocaleString("en-US")}
+        </p>
       ) : null}
 
       {error ? (
@@ -253,7 +346,7 @@ export function Exporter() {
                 </a>
               </div>
             </div>
-            <Button type="button" size="lg" className="h-11" onClick={download} disabled={filtered.length === 0}>
+            <Button type="button" size="lg" className="h-11" onClick={download} disabled={filtered.length === 0 || funding !== null}>
               <Download />
               Download CSV
               {filtered.length > 0 ? ` · ${filtered.length.toLocaleString("en-US")}` : ""}

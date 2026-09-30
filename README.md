@@ -14,6 +14,8 @@ The app reads `Swap` events from the pool contract (Uniswap v2 and v3 style), re
 
 `funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
+Swaps load first, then the page looks up funders in small batches through `/api/funders`, so a slow or rate-limited explorer never fails the whole load. Wallets the explorer could not answer are retried a few times, and Download CSV unlocks when the lookup finishes.
+
 Dates are UTC. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
 
 ## Run locally

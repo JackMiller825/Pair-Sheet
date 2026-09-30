@@ -49,31 +49,38 @@ export function funderLabel(
   return shortAddress(address)
 }
 
-export async function resolveFunders(chain: ChainConfig, makers: string[]): Promise<Map<string, Funder>> {
+export type FunderResult = {
+  found: Map<string, Funder>
+  // Wallets the explorer could not answer for (rate limit, timeout). Wallets with
+  // no incoming transfer at all are not failures and are simply absent from `found`.
+  failed: string[]
+}
+
+export async function resolveFunders(
+  chain: ChainConfig,
+  makers: string[],
+  deadline = Number.POSITIVE_INFINITY,
+): Promise<FunderResult> {
   const unique = [...new Set(makers.map((maker) => maker.toLowerCase()).filter(Boolean))]
-  const funders = new Map<string, Funder>()
-  const labels = new Map<string, string>()
-  await mapPool(unique, 8, async (maker) => {
+  const found = new Map<string, Funder>()
+  const failed: string[] = []
+  await mapPool(unique, 3, async (maker) => {
+    if (Date.now() > deadline) {
+      failed.push(maker)
+      return
+    }
     try {
       const rows = await fundingRows(chain, maker)
       const first = earliestIncoming(maker, rows)
       if (!first) return
       const address = first.from.toLowerCase()
-      let label = labels.get(address)
-      if (!label) {
-        label = funderLabel(address, {
-          name: first.fromName,
-          ens: first.fromEns,
-          tags: first.fromTags,
-        })
-        labels.set(address, label)
-      }
-      funders.set(maker, { address, label })
+      const label = funderLabel(address, { name: first.fromName, ens: first.fromEns, tags: first.fromTags })
+      found.set(maker, { address, label })
     } catch {
-      return
+      failed.push(maker)
     }
   })
-  return funders
+  return { found, failed }
 }
 
 async function fundingRows(chain: ChainConfig, maker: string): Promise<FundingRow[]> {
@@ -84,7 +91,8 @@ async function fundingRows(chain: ChainConfig, maker: string): Promise<FundingRo
     ])
     return [...internalRows, ...normalRows]
   }
-  return routescanRows(chain, maker)
+  if (!chain.routescan) return []
+  return accountRows(`https://api.routescan.io/v2/network/mainnet/evm/${chain.chainId}/etherscan/api`, maker)
 }
 
 async function blockscoutList(
@@ -117,36 +125,38 @@ async function blockscoutList(
   return rows
 }
 
-async function routescanRows(chain: ChainConfig, maker: string): Promise<FundingRow[]> {
-  if (!chain.routescan) return []
-  const base = `https://api.routescan.io/v2/network/mainnet/evm/${chain.chainId}/etherscan/api`
+// Etherscan-style account API. Sorted oldest first, so a wallet's first
+// incoming transfer is in the first page no matter how busy the wallet is.
+async function accountRows(base: string, maker: string): Promise<FundingRow[]> {
+  const lists = await Promise.all(
+    ["txlistinternal", "txlist"].map(async (action) => {
+      const params = new URLSearchParams({
+        module: "account",
+        action,
+        address: maker,
+        startblock: "0",
+        endblock: "99999999",
+        page: "1",
+        offset: "25",
+        sort: "asc",
+      })
+      const body = (await fetchFunding(`${base}?${params}`)) as { result?: unknown }
+      return Array.isArray(body.result) ? body.result : []
+    }),
+  )
   const rows: FundingRow[] = []
-  for (const action of ["txlistinternal", "txlist"]) {
-    const params = new URLSearchParams({
-      module: "account",
-      action,
-      address: maker,
-      startblock: "0",
-      endblock: "99999999",
-      page: "1",
-      offset: "20",
-      sort: "asc",
-    })
-    const body = (await fetchFunding(`${base}?${params}`)) as { result?: unknown }
-    if (!Array.isArray(body.result)) continue
-    for (const item of body.result) {
-      const parsed = parseExplorer(item)
-      if (parsed) rows.push(parsed)
-    }
+  for (const item of lists.flat()) {
+    const parsed = parseExplorer(item)
+    if (parsed) rows.push(parsed)
   }
   return rows
 }
 
-async function fetchFunding(url: string): Promise<unknown> {
+async function fetchFunding(url: string, attempts = 2): Promise<unknown> {
   let last: Error | null = null
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
-      return await fetchJson(url, undefined, 20000)
+      return await fetchJson(url, undefined, 10000, 1)
     } catch (error) {
       last = error instanceof Error ? error : new Error("funding lookup failed")
       if (!/429|502|503|504|upstream/i.test(last.message)) break
@@ -202,6 +212,7 @@ function parseExplorer(item: unknown): FundingRow | null {
   const from = typeof row.from === "string" ? row.from : ""
   const to = typeof row.to === "string" ? row.to : ""
   if (!from || !to) return null
+  if (row.isError === "1" || row.txreceipt_status === "0") return null
   return {
     from,
     to,
