@@ -151,3 +151,31 @@ export function compareDecimal(a: string, b: string): number {
   if (left === right) return 0
   return (left < right ? -1 : 1) * direction
 }
+
+// Exact sum of decimal strings such as "0.3" and "4.45892281616295148".
+// Uses bigint so 18-decimal token amounts do not pick up float rounding.
+export function sumDecimals(values: string[]): string {
+  const parts = values
+    .map((value) => value.trim())
+    .filter((value) => /^-?\d+(\.\d+)?$/.test(value))
+    .map((value) => {
+      const [whole, fraction = ""] = value.replace("-", "").split(".")
+      return { negative: value.startsWith("-"), whole, fraction }
+    })
+  const places = parts.reduce((max, part) => Math.max(max, part.fraction.length), 0)
+  let total = 0n
+  for (const part of parts) {
+    const scaled = BigInt(part.whole + part.fraction.padEnd(places, "0"))
+    total += part.negative ? -scaled : scaled
+  }
+  return formatScaled(total, places)
+}
+
+export function formatIncome(amount: string, places = 6): string {
+  const negative = amount.startsWith("-")
+  const [whole, fraction = ""] = amount.replace("-", "").split(".")
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  const trimmed = fraction.slice(0, places).replace(/0+$/, "")
+  const body = trimmed ? `${grouped}.${trimmed}` : grouped
+  return negative && body !== "0" ? `-${body}` : body
+}

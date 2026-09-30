@@ -7,6 +7,7 @@ import {
   formatTradeDate,
   priceInQuote,
   priceUsdFromTotal,
+  sumDecimals,
   totalUsd,
 } from "./format"
 import { earliestIncoming, funderLabel, type FundingRow } from "./funded"
@@ -180,3 +181,10 @@ function encodeInt(value: bigint): string {
   const encoded = value < 0n ? mod : value
   return encoded.toString(16).padStart(64, "0")
 }
+
+test("sums WETH amounts exactly", () => {
+  assert.equal(sumDecimals(["0.1", "0.2"]), "0.3")
+  assert.equal(sumDecimals(["4.45892281616295148", "0.3", "1"]), "5.75892281616295148")
+  assert.equal(sumDecimals(["10", "-2.5"]), "7.5")
+  assert.equal(sumDecimals([]), "0")
+})

@@ -1,13 +1,22 @@
 "use client"
 
 import { useMemo, useRef, useState } from "react"
-import { ArrowDown, ArrowUp, Download, ExternalLink, Loader2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Calculator, Download, ExternalLink, Loader2, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { supportedChainNames } from "@/lib/chains"
 import { csvFilename, tradesToCsv } from "@/lib/csv"
-import { compareDecimal, formatGroupedAmount, formatTiny, formatTradeDate, formatUsd, shortAddress } from "@/lib/format"
+import {
+  compareDecimal,
+  formatGroupedAmount,
+  formatIncome,
+  formatTiny,
+  formatTradeDate,
+  formatUsd,
+  shortAddress,
+  sumDecimals,
+} from "@/lib/format"
 import { EXAMPLE_URL } from "@/lib/parse-url"
 import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 
@@ -31,6 +40,17 @@ const FUNDER_BATCH = 6
 const FUNDER_PARALLEL = 2
 const FUNDER_PASSES = 4
 const FUNDER_RETRY_MS = 6000
+
+type Income = {
+  count: number
+  buys: number
+  sells: number
+  total: string
+  bought: string
+  sold: string
+  net: string
+  usd: string | null
+}
 
 type FunderMap = Record<string, { address: string; label: string }>
 
@@ -69,6 +89,8 @@ export function Exporter() {
   const [copied, setCopied] = useState(false)
   const [funding, setFunding] = useState<{ done: number; total: number } | null>(null)
   const run = useRef(0)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [income, setIncome] = useState<Income | null>(null)
 
   async function lookUpFunders(chainId: string, makers: string[], token: number) {
     let pending = [...new Set(makers.map((maker) => maker.toLowerCase()).filter(Boolean))]
@@ -132,6 +154,8 @@ export function Exporter() {
     setPool(null)
     setTrades([])
     setFunder("")
+    setSelected(new Set())
+    setIncome(null)
     setFunding(null)
     setProgress("Reading swaps from the chain…")
 
@@ -214,6 +238,53 @@ export function Exporter() {
   }, [trades])
 
   const stats = useMemo(() => summarize(trades), [trades])
+
+  const allVisibleSelected = filtered.length > 0 && filtered.every((trade) => selected.has(trade.id))
+  const someVisibleSelected = filtered.some((trade) => selected.has(trade.id))
+
+  function changeSelection(update: (draft: Set<string>) => void) {
+    setSelected((current) => {
+      const next = new Set(current)
+      update(next)
+      return next
+    })
+    setIncome(null)
+  }
+
+  function toggleTrade(id: string) {
+    changeSelection((draft) => {
+      if (!draft.delete(id)) draft.add(id)
+    })
+  }
+
+  function toggleVisible() {
+    changeSelection((draft) => {
+      for (const trade of filtered) {
+        if (allVisibleSelected) draft.delete(trade.id)
+        else draft.add(trade.id)
+      }
+    })
+  }
+
+  function calculateIncome() {
+    const chosen = trades.filter((trade) => selected.has(trade.id))
+    if (chosen.length === 0) return
+    const buys = chosen.filter((trade) => trade.type === "BUY")
+    const sells = chosen.filter((trade) => trade.type === "SELL")
+    const bought = sumDecimals(buys.map((trade) => trade.quoteAmount))
+    const sold = sumDecimals(sells.map((trade) => trade.quoteAmount))
+    const usdValues = chosen.flatMap((trade) => (trade.totalUsd ? [trade.totalUsd] : []))
+    setIncome({
+      count: chosen.length,
+      buys: buys.length,
+      sells: sells.length,
+      total: sumDecimals(chosen.map((trade) => trade.quoteAmount)),
+      bought,
+      sold,
+      net: sumDecimals([sold, `-${bought}`]),
+      usd: usdValues.length > 0 ? sumDecimals(usdValues) : null,
+    })
+  }
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -406,14 +477,84 @@ export function Exporter() {
             />
           </div>
 
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-card px-4 py-3 ring-1 ring-foreground/10">
+            <Button type="button" size="lg" className="h-10" onClick={calculateIncome} disabled={selected.size === 0}>
+              <Calculator />
+              Calculate Income
+            </Button>
+            <p className="text-sm text-muted-foreground" aria-live="polite">
+              {selected.size === 0
+                ? "Tick transactions in the table, then calculate the WETH total."
+                : `${selected.size.toLocaleString("en-US")} transaction${selected.size === 1 ? "" : "s"} selected`}
+            </p>
+            {selected.size > 0 ? (
+              <button
+                type="button"
+                className="ml-auto inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm text-foreground hover:bg-accent"
+                onClick={() => changeSelection((draft) => draft.clear())}
+              >
+                <X className="size-3.5" />
+                Clear selection
+              </button>
+            ) : null}
+          </div>
+
+          {income ? (
+            <div className="rounded-2xl bg-card p-4 ring-1 ring-primary/40" role="region" aria-label="Income result">
+              <p className="text-xs tracking-wide text-muted-foreground uppercase">
+                Sum of {pool.quoteSymbol} in {income.count.toLocaleString("en-US")} selected transaction{income.count === 1 ? "" : "s"}
+              </p>
+              <p className="mt-1 font-mono text-3xl font-semibold text-primary" title={`${income.total} ${pool.quoteSymbol}`} data-testid="income-total">
+                {formatIncome(income.total)} {pool.quoteSymbol}
+              </p>
+              <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+                <div>
+                  <dt className="text-muted-foreground">Bought ({income.buys.toLocaleString("en-US")} {income.buys === 1 ? "buy" : "buys"})</dt>
+                  <dd className="font-mono text-emerald-400">
+                    {formatIncome(income.bought)} {pool.quoteSymbol}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Sold ({income.sells.toLocaleString("en-US")} {income.sells === 1 ? "sell" : "sells"})</dt>
+                  <dd className="font-mono text-rose-400">
+                    {formatIncome(income.sold)} {pool.quoteSymbol}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Net (sold minus bought)</dt>
+                  <dd className="font-mono">
+                    {formatIncome(income.net)} {pool.quoteSymbol}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">USD at trade time</dt>
+                  <dd className="font-mono">{income.usd ? formatUsd(income.usd) : "—"}</dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
+
           <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1080px] border-collapse text-sm">
+              <table className="w-full min-w-[1120px] border-collapse text-sm">
                 <caption className="sr-only">
                   Swaps for {pool.baseSymbol} / {pool.quoteSymbol}
                 </caption>
                 <thead className="bg-muted/70 text-left text-xs tracking-wide text-muted-foreground uppercase">
                   <tr>
+                    <th className="w-10 px-3 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label="Select all shown transactions"
+                        className="size-4 cursor-pointer accent-[var(--primary)]"
+                        checked={allVisibleSelected}
+                        ref={(node) => {
+                          if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected
+                        }}
+                        onChange={toggleVisible}
+                        disabled={filtered.length === 0}
+                      />
+                    </th>
                     <SortHeader label="Date (UTC)" column="timestamp" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Type" column="type" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Price (USD)" column="priceUsd" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
@@ -428,7 +569,7 @@ export function Exporter() {
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-4 py-16 text-center text-muted-foreground">
+                      <td colSpan={10} className="px-4 py-16 text-center text-muted-foreground">
                         {phase === "loading"
                           ? "Reading swap logs…"
                           : trades.length === 0
@@ -438,7 +579,19 @@ export function Exporter() {
                     </tr>
                   ) : (
                     filtered.map((trade) => (
-                      <tr key={trade.id} className="border-t border-border/80 hover:bg-muted/40">
+                      <tr
+                        key={trade.id}
+                        className={`border-t border-border/80 hover:bg-muted/40 ${selected.has(trade.id) ? "bg-primary/10" : ""}`}
+                      >
+                        <td className="px-3 py-2">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${trade.type} ${trade.txHash}`}
+                            className="size-4 cursor-pointer accent-[var(--primary)]"
+                            checked={selected.has(trade.id)}
+                            onChange={() => toggleTrade(trade.id)}
+                          />
+                        </td>
                         <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatTradeDate(trade.timestamp)}</td>
                         <td className="px-3 py-2">
                           <span className={trade.type === "BUY" ? "font-semibold text-emerald-400" : "font-semibold text-rose-400"}>

@@ -53,3 +53,7 @@ Exports stop at 20,000 swaps and say so when a pool is larger.
 `https://www.dextools.io/app/{chain}/pair-explorer/{pool}`
 
 A locale segment is fine: `/app/en/ether/pair-explorer/0x…`.
+
+## Calculate Income
+
+Tick the checkbox on any rows (or the header box to tick everything currently shown), then press **Calculate Income**. The panel shows the exact sum of the quote token (WETH on this pool) across the selected transactions, split into bought and sold, plus net (sold minus bought) and the USD value at trade time. Selections survive filter changes; changing the selection clears the old result so it never shows a stale number.
