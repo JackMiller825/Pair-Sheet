@@ -54,6 +54,8 @@ export type Trade = {
   quoteAmount: string
   maker: string
   txHash: string
+  fundedBy: string | null
+  fundedByAddress: string | null
 }
 
 export type SwapsResponse = {

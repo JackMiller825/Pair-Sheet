@@ -9,6 +9,7 @@ import {
   priceUsdFromTotal,
   totalUsd,
 } from "./format"
+import { earliestIncoming, funderLabel, type FundingRow } from "./funded"
 import { EXAMPLE_URL, parseDextoolsUrl } from "./parse-url"
 import type { PoolContext, PoolView, Trade } from "./types"
 
@@ -131,12 +132,47 @@ test("writes an excel-friendly csv", () => {
     quoteAmount: "4.45892281616295148",
     maker: "0x591f85c11cafea17f7cc926f13e2ed7c794f2522",
     txHash: "0xabc,def",
+    fundedBy: "Disperse.app",
+    fundedByAddress: "0xd152f549545093347a162dce210e7293f1452150",
   }
   const csv = tradesToCsv(view, [trade])
   assert.equal(csv.startsWith("\uFEFF"), true)
   assert.match(csv, /date_utc,type,price_usd,total_usd/)
   assert.match(csv, /"0xabc,def"/)
+  assert.match(csv, /Disperse\.app,0xd152f549545093347a162dce210e7293f1452150/)
   assert.equal(csvFilename(view), "fwog-weth-ether-swaps.csv")
+})
+
+test("picks the earliest incoming funding and the public label", () => {
+  const maker = "0x591f85c11cafea17f7cc926f13e2ed7c794f2522"
+  const rows: FundingRow[] = [
+    {
+      from: "0x130522d07a21ca506a0ac76bca5f9f20f6bb9101",
+      to: maker,
+      value: "4458922816162951480",
+      blockNumber: 20456217,
+      timestamp: 1722786863,
+    },
+    {
+      from: "0xd152f549545093347a162dce210e7293f1452150",
+      to: maker,
+      value: "100000000000000000",
+      blockNumber: 20451599,
+      timestamp: 1722731279,
+    },
+    {
+      from: maker,
+      to: "0x130522d07a21ca506a0ac76bca5f9f20f6bb9101",
+      value: "0",
+      blockNumber: 20451627,
+      timestamp: 1722731615,
+    },
+  ]
+  const first = earliestIncoming(maker, rows)
+  assert.ok(first)
+  assert.equal(first.from, "0xd152f549545093347a162dce210e7293f1452150")
+  assert.equal(funderLabel(first.from, { name: "Disperse" }), "Disperse.app")
+  assert.equal(funderLabel("0xabc1230000000000000000000000000000000001", { name: "Router" }), "Router")
 })
 
 function encodeInt(value: bigint): string {

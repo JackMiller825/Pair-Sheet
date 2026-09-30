@@ -1,6 +1,7 @@
 import { chainCanExport, type ChainConfig } from "./chains"
 import { decodeSwap, topicOrder } from "./decode"
 import { formatUnits, priceInQuote, priceUsdFromTotal, totalUsd } from "./format"
+import { resolveFunders } from "./funded"
 import { AppError, fetchJson, mapPool, rpcBatch } from "./http"
 import { parseDextoolsUrl } from "./parse-url"
 import { resolvePool } from "./pool"
@@ -276,9 +277,21 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       priceUsd: usd ? priceUsdFromTotal(usd, baseAmount) : null,
       maker: makers.get(log.txHash.toLowerCase()) ?? "",
       txHash: log.txHash,
+      fundedBy: null,
+      fundedByAddress: null,
     }
     return trade
   })
+
+  const funders = await resolveFunders(
+    chain,
+    trades.map((trade) => trade.maker),
+  )
+  for (const trade of trades) {
+    const funder = funders.get(trade.maker.toLowerCase())
+    trade.fundedBy = funder?.label ?? null
+    trade.fundedByAddress = funder?.address ?? null
+  }
 
   trades.sort((a, b) => {
     if (a.blockNumber !== b.blockNumber) return b.blockNumber - a.blockNumber

@@ -10,7 +10,9 @@ The app reads `Swap` events from the pool contract (Uniswap v2 and v3 style), re
 
 ## CSV columns
 
-`date_utc`, `type` (`BUY` or `SELL`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `maker`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+`date_utc`, `type` (`BUY` or `SELL`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+
+`funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
 Dates are UTC. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
 

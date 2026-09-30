@@ -15,7 +15,16 @@ const MAX_TRADES = 20000
 
 type Phase = "idle" | "loading" | "done" | "error"
 type SideFilter = "ALL" | "BUY" | "SELL"
-type SortKey = "timestamp" | "type" | "priceUsd" | "totalUsd" | "priceQuote" | "baseAmount" | "quoteAmount" | "maker"
+type SortKey =
+  | "timestamp"
+  | "type"
+  | "priceUsd"
+  | "totalUsd"
+  | "priceQuote"
+  | "baseAmount"
+  | "quoteAmount"
+  | "maker"
+  | "fundedBy"
 
 const CHAINS = supportedChainNames().join(", ")
 
@@ -30,6 +39,7 @@ export function Exporter() {
   const [capped, setCapped] = useState(false)
   const [filter, setFilter] = useState<SideFilter>("ALL")
   const [query, setQuery] = useState("")
+  const [funder, setFunder] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("timestamp")
   const [sortDesc, setSortDesc] = useState(true)
   const [copied, setCopied] = useState(false)
@@ -42,7 +52,8 @@ export function Exporter() {
     setCapped(false)
     setPool(null)
     setTrades([])
-    setProgress("Resolving the pair…")
+    setFunder("")
+    setProgress("Reading swaps and who funded each wallet…")
 
     try {
       let cursor: string | null = null
@@ -88,12 +99,30 @@ export function Exporter() {
     const needle = query.trim().toLowerCase()
     const rows = trades.filter((trade) => {
       if (filter !== "ALL" && trade.type !== filter) return false
+      if (funder === "__none__" && trade.fundedByAddress) return false
+      if (funder && funder !== "__none__" && trade.fundedByAddress !== funder) return false
       if (!needle) return true
-      return trade.maker.includes(needle) || trade.txHash.includes(needle)
+      return (
+        trade.maker.includes(needle) ||
+        trade.txHash.includes(needle) ||
+        (trade.fundedBy ?? "").toLowerCase().includes(needle) ||
+        (trade.fundedByAddress ?? "").includes(needle)
+      )
     })
     const sorted = [...rows].sort((a, b) => compareTrades(a, b, sortKey) * (sortDesc ? -1 : 1))
     return sorted
-  }, [trades, filter, query, sortKey, sortDesc])
+  }, [trades, filter, funder, query, sortKey, sortDesc])
+
+  const funders = useMemo(() => {
+    const counts = new Map<string, { label: string; count: number }>()
+    for (const trade of trades) {
+      const key = trade.fundedByAddress || "__none__"
+      const current = counts.get(key) ?? { label: trade.fundedBy || "Unknown", count: 0 }
+      current.count += 1
+      counts.set(key, current)
+    }
+    return [...counts.entries()].sort((left, right) => right[1].count - left[1].count || left[1].label.localeCompare(right[1].label))
+  }, [trades])
 
   const stats = useMemo(() => summarize(trades), [trades])
 
@@ -103,7 +132,7 @@ export function Exporter() {
       return
     }
     setSortKey(key)
-    setSortDesc(key === "maker" || key === "type" ? false : true)
+    setSortDesc(key === "maker" || key === "type" || key === "fundedBy" ? false : true)
   }
 
   function download() {
@@ -245,7 +274,7 @@ export function Exporter() {
             </p>
           ) : null}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div className="flex gap-1 rounded-lg bg-muted p-1">
               {(["ALL", "BUY", "SELL"] as SideFilter[]).map((side) => (
                 <button
@@ -259,10 +288,26 @@ export function Exporter() {
                 </button>
               ))}
             </div>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Funded by
+              <select
+                aria-label="Filter by funded by"
+                value={funder}
+                onChange={(event) => setFunder(event.target.value)}
+                className="h-9 max-w-56 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
+              >
+                <option value="">All</option>
+                {funders.map(([address, info]) => (
+                  <option key={address} value={address}>
+                    {info.label} ({info.count})
+                  </option>
+                ))}
+              </select>
+            </label>
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Filter by maker or tx hash"
+              placeholder="Filter by maker, funder, or tx"
               className="h-9 sm:max-w-xs"
               spellCheck={false}
             />
@@ -270,7 +315,7 @@ export function Exporter() {
 
           <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[920px] border-collapse text-sm">
+              <table className="w-full min-w-[1080px] border-collapse text-sm">
                 <caption className="sr-only">
                   Swaps for {pool.baseSymbol} / {pool.quoteSymbol}
                 </caption>
@@ -284,12 +329,13 @@ export function Exporter() {
                     <SortHeader label={pool.baseSymbol} column="baseAmount" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label={pool.quoteSymbol} column="quoteAmount" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label="Maker" column="maker" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
+                    <SortHeader label="Funded by" column="fundedBy" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-4 py-16 text-center text-muted-foreground">
+                      <td colSpan={9} className="px-4 py-16 text-center text-muted-foreground">
                         {phase === "loading"
                           ? "Reading swap logs…"
                           : trades.length === 0
@@ -333,6 +379,20 @@ export function Exporter() {
                             tx
                           </a>
                         </td>
+                        <td className="px-3 py-2">
+                          {trade.fundedBy && trade.fundedByAddress ? (
+                            <a
+                              className="text-xs font-medium text-rose-300 hover:text-rose-200"
+                              href={`${pool.explorerAddress}/${trade.fundedByAddress}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {trade.fundedBy}
+                            </a>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
                       </tr>
                     ))
                   )}
@@ -343,14 +403,14 @@ export function Exporter() {
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from on-chain Swap events. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes the rows currently shown
-            {filter !== "ALL" || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Supported chains: {CHAINS}.
+            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (
         <section className="grid gap-3 sm:grid-cols-3">
           <Step n="1" title="Paste the pair" body="Use the pair-explorer URL from DEXTools, including the chain and pool address." />
           <Step n="2" title="Read the tape" body="Buys and sells are decoded from the pool’s Swap logs, with the wallet that sent each transaction." />
-          <Step n="3" title="Save the CSV" body="Date, side, USD price, total, both token amounts, maker, and transaction hash." />
+          <Step n="3" title="Save the CSV" body="Date, side, USD price, total, both token amounts, maker, who funded that wallet, and transaction hash." />
         </section>
       ) : null}
     </div>
@@ -378,6 +438,7 @@ function summarize(trades: Trade[]) {
 function compareTrades(a: Trade, b: Trade, key: SortKey): number {
   if (key === "timestamp") return a.timestamp.localeCompare(b.timestamp) || a.logIndex - b.logIndex
   if (key === "type" || key === "maker") return a[key].localeCompare(b[key])
+  if (key === "fundedBy") return (a.fundedBy || "").localeCompare(b.fundedBy || "")
   const left = a[key] || "0"
   const right = b[key] || "0"
   return compareDecimal(left, right)
