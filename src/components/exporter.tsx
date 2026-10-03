@@ -24,7 +24,15 @@ import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 const MAX_TRADES = 20000
 
 type Phase = "idle" | "loading" | "done" | "error"
-type SideFilter = "ALL" | "BUY" | "SELL"
+type SideFilter = "ALL" | "BUY" | "SELL" | "ADD" | "REMOVE"
+
+const FILTER_LABELS: Record<SideFilter, string> = {
+  ALL: "All",
+  BUY: "Buys",
+  SELL: "Sells",
+  ADD: "Adds",
+  REMOVE: "Removes",
+}
 type SortKey =
   | "timestamp"
   | "type"
@@ -39,6 +47,7 @@ type SortKey =
   | "fundedBy"
 
 const CHAINS = supportedChainNames().join(", ")
+const PAGE_ATTEMPTS = 3
 const FUNDER_BATCH = 6
 const FUNDER_PARALLEL = 2
 const FUNDER_PASSES = 4
@@ -48,6 +57,7 @@ type Income = {
   count: number
   buys: number
   sells: number
+  liquidity: number
   total: string
   bought: string
   sold: string
@@ -160,7 +170,7 @@ export function Exporter() {
     setSelected(new Set())
     setIncome(null)
     setFunding(null)
-    setProgress("Reading swaps from the chain…")
+    setProgress("Reading transactions from the chain…")
 
     try {
       let cursor: string | null = null
@@ -168,16 +178,29 @@ export function Exporter() {
       const seen = new Set<string>()
       let chainId = ""
       do {
-        const response: Response = await fetch("/api/swaps", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ url: trimmed, cursor }),
-        })
-        const body: SwapsResponse & { error?: string } = await readJson<SwapsResponse>(response, "Could not load swaps.")
-        if (run.current !== token) return
-        if (!response.ok) {
-          throw new Error(body.error || `Could not load swaps. The server answered with status ${response.status}.`)
+        let body: SwapsResponse & { error?: string } | null = null
+        let failure = "Could not load swaps."
+        for (let attempt = 0; attempt < PAGE_ATTEMPTS && !body; attempt += 1) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt))
+          try {
+            const response: Response = await fetch("/api/swaps", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ url: trimmed, cursor }),
+            })
+            const parsed: SwapsResponse & { error?: string } = await readJson<SwapsResponse>(response, "Could not load swaps.")
+            if (run.current !== token) return
+            if (response.ok) body = parsed
+            else {
+              failure = parsed.error || `Could not load swaps. The server answered with status ${response.status}.`
+              if (response.status < 500) break
+            }
+          } catch (requestError) {
+            if (run.current !== token) return
+            failure = requestError instanceof Error ? requestError.message : failure
+          }
         }
+        if (!body) throw new Error(failure)
         chainId = body.pool.chainId
         setPool(body.pool)
         if (body.warning) setWarning(body.warning)
@@ -189,8 +212,8 @@ export function Exporter() {
         setTrades([...loaded])
         setProgress(
           body.nextCursor
-            ? `Loaded ${loaded.length.toLocaleString("en-US")} swaps. Still reading the chain…`
-            : `Loaded ${loaded.length.toLocaleString("en-US")} swaps.`,
+            ? `Loaded ${loaded.length.toLocaleString("en-US")} transactions. Still reading the chain…`
+            : `Loaded ${loaded.length.toLocaleString("en-US")} transactions.`,
         )
         cursor = body.nextCursor
         if (cursor && loaded.length >= MAX_TRADES) {
@@ -276,12 +299,14 @@ export function Exporter() {
     const sells = chosen.filter((trade) => trade.type === "SELL")
     const bought = sumDecimals(buys.map((trade) => trade.quoteAmount))
     const sold = sumDecimals(sells.map((trade) => trade.quoteAmount))
-    const usdValues = chosen.flatMap((trade) => (trade.totalUsd ? [trade.totalUsd] : []))
+    const swaps = [...buys, ...sells]
+    const usdValues = swaps.flatMap((trade) => (trade.totalUsd ? [trade.totalUsd] : []))
     setIncome({
       count: chosen.length,
       buys: buys.length,
       sells: sells.length,
-      total: sumDecimals(chosen.map((trade) => trade.quoteAmount)),
+      liquidity: chosen.length - swaps.length,
+      total: sumDecimals(swaps.map((trade) => trade.quoteAmount)),
       bought,
       sold,
       net: sumDecimals([sold, `-${bought}`]),
@@ -427,23 +452,24 @@ export function Exporter() {
             </Button>
           </div>
 
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <Stat label="Swaps" value={stats.count.toLocaleString("en-US")} />
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+            <Stat label="Transactions" value={stats.count.toLocaleString("en-US")} />
             <Stat label="Buys" value={stats.buys.toLocaleString("en-US")} tone="buy" />
             <Stat label="Sells" value={stats.sells.toLocaleString("en-US")} tone="sell" />
+            <Stat label="Add / Remove" value={`${stats.adds.toLocaleString("en-US")} / ${stats.removes.toLocaleString("en-US")}`} />
             <Stat label="Quote volume" value={stats.volume} />
           </div>
 
           {warning ? <p className="text-sm text-muted-foreground">{warning}</p> : null}
           {capped ? (
             <p className="text-sm text-muted-foreground">
-              Stopped at {MAX_TRADES.toLocaleString("en-US")} swaps. This pool has more history than one export pulls.
+              Stopped at {MAX_TRADES.toLocaleString("en-US")} transactions. This pool has more history than one export pulls.
             </p>
           ) : null}
 
           <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
             <div className="flex gap-1 rounded-lg bg-muted p-1">
-              {(["ALL", "BUY", "SELL"] as SideFilter[]).map((side) => (
+              {(Object.keys(FILTER_LABELS) as SideFilter[]).map((side) => (
                 <button
                   key={side}
                   type="button"
@@ -451,7 +477,7 @@ export function Exporter() {
                   className={`rounded-md px-3 py-1.5 text-sm font-medium ${filter === side ? "bg-background text-foreground" : "text-muted-foreground"}`}
                   onClick={() => setFilter(side)}
                 >
-                  {side === "ALL" ? "All" : side === "BUY" ? "Buys" : "Sells"}
+                  {FILTER_LABELS[side]}
                 </button>
               ))}
             </div>
@@ -534,6 +560,11 @@ export function Exporter() {
                   <dd className="font-mono">{income.usd ? formatUsd(income.usd) : "—"}</dd>
                 </div>
               </dl>
+              {income.liquidity > 0 ? (
+                <p className="mt-3 text-xs text-muted-foreground">
+                  {income.liquidity.toLocaleString("en-US")} selected add/remove row{income.liquidity === 1 ? " is" : "s are"} not counted, only buys and sells.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -576,9 +607,9 @@ export function Exporter() {
                     <tr>
                       <td colSpan={12} className="px-4 py-16 text-center text-muted-foreground">
                         {phase === "loading"
-                          ? "Reading swap logs…"
+                          ? "Reading pool logs…"
                           : trades.length === 0
-                            ? "No Uniswap-style swaps were found on this pool."
+                            ? "No Uniswap-style transactions were found on this pool."
                             : "Nothing matches this filter."}
                       </td>
                     </tr>
@@ -599,7 +630,7 @@ export function Exporter() {
                         </td>
                         <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatTradeDate(trade.timestamp)}</td>
                         <td className="px-3 py-2">
-                          <span className={trade.type === "BUY" ? "font-semibold text-emerald-400" : "font-semibold text-rose-400"}>
+                          <span className={`font-semibold ${TYPE_TONE[trade.type]}`}>
                             {trade.type}
                           </span>
                         </td>
@@ -658,7 +689,7 @@ export function Exporter() {
             </div>
           </div>
           <p className="text-xs leading-5 text-muted-foreground">
-            Amounts come from on-chain Swap events. USD totals multiply the quote token by its historical price from DefiLlama.
+            Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes the rows currently shown
             {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
@@ -674,11 +705,28 @@ export function Exporter() {
   )
 }
 
+const TYPE_TONE: Record<Trade["type"], string> = {
+  BUY: "text-emerald-400",
+  SELL: "text-rose-400",
+  ADD: "text-sky-400",
+  REMOVE: "text-amber-400",
+}
+
 function summarize(trades: Trade[]) {
   let buys = 0
   let sells = 0
+  let adds = 0
+  let removes = 0
   let volume = 0
   for (const trade of trades) {
+    if (trade.type === "ADD") {
+      adds += 1
+      continue
+    }
+    if (trade.type === "REMOVE") {
+      removes += 1
+      continue
+    }
     if (trade.type === "BUY") buys += 1
     else sells += 1
     const total = Number(trade.totalUsd)
@@ -688,6 +736,8 @@ function summarize(trades: Trade[]) {
     count: trades.length,
     buys,
     sells,
+    adds,
+    removes,
     volume: volume > 0 ? formatUsd(volume.toFixed(2)) : "—",
   }
 }

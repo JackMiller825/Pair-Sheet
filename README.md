@@ -6,17 +6,17 @@ Example:
 
 `https://www.dextools.io/app/ether/pair-explorer/0x961bde5165b921561e6e97fee8c2dfbdaf49c737`
 
-The app reads `Swap` events from the pool contract (Uniswap v2 and v3 style), resolves the wallet that sent each transaction, and prices the quote token with historical data from DefiLlama. Amounts in the file are the on-chain values. USD figures follow the quote token’s price at the time of the swap, so they can differ slightly from the number shown on DEXTools.
+The app reads `Swap`, `Mint` (liquidity added) and `Burn` (liquidity removed) events from the pool contract (Uniswap v2 and v3 style), resolves the wallet that sent each transaction, and prices the quote token with historical data from DefiLlama. Amounts in the file are the on-chain values. USD figures follow the quote token’s price at the time of the swap, so they can differ slightly from the number shown on DEXTools.
 
 ## CSV columns
 
-`date_utc`, `type` (`BUY` or `SELL`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+`date_utc`, `type` (`BUY`, `SELL`, `ADD` or `REMOVE`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
 
 `funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
 Swaps load first, then the page looks up funders in small batches through `/api/funders`, so a slow or rate-limited explorer never fails the whole load. Wallets the explorer could not answer are retried a few times, and Download CSV unlocks when the lookup finishes.
 
-Dates are UTC. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
+Dates are UTC. `ADD` and `REMOVE` are liquidity events: the two amounts are the tokens deposited or withdrawn, and `total_usd` is the quote-token side. Burns that move nothing (V3 fee pokes) are skipped. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
 
 ## Run locally
 
@@ -46,7 +46,7 @@ Ethereum, Polygon, Base, Arbitrum, Optimism, Avalanche, Blast, zkSync, Celo, Uni
 
 BNB Chain, Linea, Scroll, Gnosis, and Mantle are recognized in DEXTools URLs, but this app does not have a public full-history index for them yet. Solana and other non-EVM DEXTools chains are not exported.
 
-Exports stop at 20,000 swaps and say so when a pool is larger.
+Exports stop at 20,000 transactions and say so when a pool is larger.
 
 ## How a link is read
 
@@ -56,12 +56,12 @@ A locale segment is fine: `/app/en/ether/pair-explorer/0x…`.
 
 ## Calculate Income
 
-Tick the checkbox on any rows (or the header box to tick everything currently shown), then press **Calculate Income**. The panel shows the exact sum of the quote token (WETH on this pool) across the selected transactions, split into bought and sold, plus net (sold minus bought) and the USD value at trade time. Selections survive filter changes; changing the selection clears the old result so it never shows a stale number.
+Tick the checkbox on any rows (or the header box to tick everything currently shown), then press **Calculate Income**. Only buys and sells are counted (add/remove rows are listed as skipped). The panel shows the exact sum of the quote token (WETH on this pool) across the selected transactions, split into bought and sold, plus net (sold minus bought) and the USD value at trade time. Selections survive filter changes; changing the selection clears the old result so it never shows a stale number.
 
 ## Pool size after each swap
 
-Every row shows how much of each token the pool held right after that swap (the "Pool FWOG" and "Pool WETH" columns, and `pool_base_after` / `pool_quote_after` in the CSV). The cells are rounded; hover for the exact value.
+Every row shows how much of each token the pool held right after that transaction (the "Pool FWOG" and "Pool WETH" columns, and `pool_base_after` / `pool_quote_after` in the CSV). The cells are rounded; hover for the exact value.
 
-- Uniswap V2 style pools emit a `Sync(reserve0, reserve1)` event immediately before every `Swap`, so the value is the exact reserve after that trade.
+- Uniswap V2 style pools emit a `Sync(reserve0, reserve1)` event immediately before every `Swap`, `Mint` and `Burn`, so the value is the exact reserve after that trade.
 - Uniswap V3 style pools emit no reserves, so the value is the pool's token balances at the end of the swap's block (read with archive `eth_call`s). Several swaps in one block share the same value.
 - If a chain's public RPCs cannot serve the data, the cell shows a dash and the CSV cell is empty. Swap data is unaffected.

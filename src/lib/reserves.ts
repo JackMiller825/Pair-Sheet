@@ -1,5 +1,5 @@
 import type { ChainConfig } from "./chains"
-import { SWAP_V2_TOPIC, decodeWord, sameAddress } from "./decode"
+import { decodeWord, isV2Family, sameAddress } from "./decode"
 import { formatUnits } from "./format"
 import { fetchJson, mapPool, rpcBatch } from "./http"
 import type { PoolContext, RawLog } from "./types"
@@ -28,8 +28,8 @@ export async function loadPoolSizes(
   logs: RawLog[],
 ): Promise<Map<string, PoolSize>> {
   const sizes = new Map<string, PoolSize>()
-  const v2 = logs.filter((log) => (log.topics[0] || "").toLowerCase() === SWAP_V2_TOPIC)
-  const v3 = logs.filter((log) => (log.topics[0] || "").toLowerCase() !== SWAP_V2_TOPIC)
+  const v2 = logs.filter((log) => isV2Family(log.topics[0] || ""))
+  const v3 = logs.filter((log) => !isV2Family(log.topics[0] || ""))
   await Promise.all([fillFromSync(chain, pool, v2, sizes), fillFromBalances(chain, pool, v3, sizes)])
   return sizes
 }

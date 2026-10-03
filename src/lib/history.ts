@@ -1,5 +1,5 @@
 import { chainCanExport, type ChainConfig } from "./chains"
-import { decodeSwap, topicOrder } from "./decode"
+import { decodeSwap, liquidityTopics, topicOrder } from "./decode"
 import { formatUnits, priceInQuote, priceUsdFromTotal, totalUsd } from "./format"
 import { AppError, fetchJson, mapPool, rpcBatch } from "./http"
 import { parseDextoolsUrl } from "./parse-url"
@@ -15,6 +15,7 @@ type ServerCursor = {
   source: "routescan" | "blockscout"
   topic: string
   triedTopics: string[]
+  queue: string[]
   page: number
   blockscoutParams: Record<string, string> | null
   pool: PoolContext
@@ -43,6 +44,7 @@ export async function getSwapPage(rawUrl: string, cursorText: string | null): Pr
   const topic = cursor?.topic ?? topics[0]
   const tried = new Set(cursor?.triedTopics ?? [topic])
 
+  const chain = parsed.chain
   const page = await readPage(parsed.chain, pool.address, topic, cursor)
   let trades = await hydrate(parsed.chain, pool, page.logs)
   let next = page.next
@@ -62,13 +64,28 @@ export async function getSwapPage(rawUrl: string, cursorText: string | null): Pr
     }
   }
 
-  const nextCursor = next
+  const queue = cursor ? (cursor.queue ?? []) : liquidityTopics(activeTopic)
+  let following = next
+  let followingTopic = activeTopic
+  let remaining = queue
+  if (!following && queue.length > 0) {
+    followingTopic = queue[0]
+    remaining = queue.slice(1)
+    following = {
+      source: chain.routescan ? "routescan" : "blockscout",
+      page: 1,
+      blockscoutParams: null,
+    }
+  }
+
+  const nextCursor = following
     ? encodeCursor({
-        source: next.source,
-        topic: activeTopic,
+        source: following.source,
+        topic: followingTopic,
         triedTopics: [...tried],
-        page: next.page,
-        blockscoutParams: next.blockscoutParams,
+        queue: remaining,
+        page: following.page,
+        blockscoutParams: following.blockscoutParams,
         pool,
       })
     : null
@@ -270,6 +287,7 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       swap.baseRaw,
       pool.base.decimals,
     )
+    const oneSided = swap.baseRaw === 0n || swap.quoteRaw === 0n
     const usd = quotePrice === null ? null : totalUsd(swap.quoteRaw, pool.quote.decimals, quotePrice)
     const trade: Trade = {
       id: `${log.txHash}-${log.logIndex}`,
@@ -277,13 +295,13 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       blockNumber: log.blockNumber,
       logIndex: log.logIndex,
       type: swap.type,
-      priceQuote,
+      priceQuote: oneSided ? null : priceQuote,
       baseAmount,
       quoteAmount,
       baseReserve: size?.base ?? null,
       quoteReserve: size?.quote ?? null,
       totalUsd: usd,
-      priceUsd: usd ? priceUsdFromTotal(usd, baseAmount) : null,
+      priceUsd: usd && !oneSided ? priceUsdFromTotal(usd, baseAmount) : null,
       maker: makers.get(log.txHash.toLowerCase()) ?? "",
       txHash: log.txHash,
       fundedBy: null,

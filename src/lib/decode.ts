@@ -5,6 +5,27 @@ export const SWAP_V2_TOPIC =
 export const SWAP_V3_TOPIC =
   "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
 
+export const MINT_V2_TOPIC =
+  "0x4c209b5fc8ad50758f13e2e1088ba56a560dff690a1c6fef26394f4c03821c4f"
+export const BURN_V2_TOPIC =
+  "0xdccd412f0b1252819cb1fd330b93224ca42612892bb3f4f789976e6d81936496"
+export const MINT_V3_TOPIC =
+  "0x7a53080ba414158be7ec69b987b5fb7d07dee101fe85488f0853ae16239d0bde"
+export const BURN_V3_TOPIC =
+  "0x0c396cd989a39f4459b5fa1aed6a9a8dcdbc45908acfd67e028cd568da98982c"
+
+const V2_FAMILY = [SWAP_V2_TOPIC, MINT_V2_TOPIC, BURN_V2_TOPIC]
+
+export function isV2Family(topic: string): boolean {
+  return V2_FAMILY.includes(topic.toLowerCase())
+}
+
+export function liquidityTopics(swapTopic: string): string[] {
+  return swapTopic.toLowerCase() === SWAP_V3_TOPIC
+    ? [MINT_V3_TOPIC, BURN_V3_TOPIC]
+    : [MINT_V2_TOPIC, BURN_V2_TOPIC]
+}
+
 export type DecodedSwap = {
   type: Side
   baseRaw: bigint
@@ -42,7 +63,28 @@ export function decodeSwap(log: RawLog, pool: PoolContext): DecodedSwap | null {
   const topic = (log.topics[0] || "").toLowerCase()
   if (topic === SWAP_V2_TOPIC) return decodeV2(log.data, pool)
   if (topic === SWAP_V3_TOPIC) return decodeV3(log.data, pool)
+  if (topic === MINT_V2_TOPIC) return decodeLiquidity(log.data, pool, 0, "ADD")
+  if (topic === BURN_V2_TOPIC) return decodeLiquidity(log.data, pool, 0, "REMOVE")
+  if (topic === MINT_V3_TOPIC) return decodeLiquidity(log.data, pool, 2, "ADD")
+  if (topic === BURN_V3_TOPIC) return decodeLiquidity(log.data, pool, 1, "REMOVE")
   return null
+}
+
+function decodeLiquidity(
+  data: string,
+  pool: PoolContext,
+  firstAmountWord: number,
+  type: "ADD" | "REMOVE",
+): DecodedSwap | null {
+  const amount0 = decodeWord(data, firstAmountWord)
+  const amount1 = decodeWord(data, firstAmountWord + 1)
+  if (amount0 === 0n && amount1 === 0n) return null
+  const baseIs0 = sameAddress(pool.token0, pool.base.address)
+  return {
+    type,
+    baseRaw: baseIs0 ? amount0 : amount1,
+    quoteRaw: baseIs0 ? amount1 : amount0,
+  }
 }
 
 function flows(data: string, pool: PoolContext, v3: boolean) {

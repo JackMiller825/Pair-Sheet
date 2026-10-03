@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { csvFilename, tradesToCsv } from "./csv"
-import { SWAP_V2_TOPIC, decodeAbiString, decodeV2, decodeV3 } from "./decode"
+import { BURN_V3_TOPIC, MINT_V2_TOPIC, SWAP_V2_TOPIC, decodeAbiString, decodeSwap, decodeV2, decodeV3, liquidityTopics } from "./decode"
 import {
   formatPoolSize,
   formatTiny,
@@ -223,4 +223,23 @@ test("keeps significant digits for tiny pool sizes", () => {
   assert.equal(formatPoolSize("0.000009890697146748"), "0.00000989")
   assert.equal(formatPoolSize("4.458932706860098228"), "4.4589")
   assert.equal(formatPoolSize("0"), "0")
+})
+
+test("decodes liquidity adds and removes", () => {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0")
+  const log = (topic: string, words: bigint[]): RawLog => ({
+    data: `0x${words.map(word).join("")}`,
+    topics: [topic],
+    blockNumber: 1,
+    timestamp: 1,
+    txHash: "0x1",
+    logIndex: 1,
+  })
+  const flipped = { ...pool, token0: pool.quote.address, token1: pool.base.address }
+  const add = decodeSwap(log(MINT_V2_TOPIC, [3n * 10n ** 18n, 5n * 10n ** 18n]), flipped)
+  assert.deepEqual(add, { type: "ADD", baseRaw: 5n * 10n ** 18n, quoteRaw: 3n * 10n ** 18n })
+  const burn = decodeSwap(log(BURN_V3_TOPIC, [999n, 0n, 7n]), { ...pool, token0: pool.base.address, token1: pool.quote.address })
+  assert.deepEqual(burn, { type: "REMOVE", baseRaw: 0n, quoteRaw: 7n })
+  assert.equal(decodeSwap(log(BURN_V3_TOPIC, [999n, 0n, 0n]), pool), null)
+  assert.equal(liquidityTopics(SWAP_V2_TOPIC).length, 2)
 })

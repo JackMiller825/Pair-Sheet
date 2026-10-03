@@ -1,4 +1,4 @@
-export type Side = "BUY" | "SELL"
+export type Side = "BUY" | "SELL" | "ADD" | "REMOVE"
 
 export type TokenInfo = {
   address: string
