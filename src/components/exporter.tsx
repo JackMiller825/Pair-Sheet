@@ -1,11 +1,12 @@
 "use client"
 
 import { useMemo, useRef, useState } from "react"
-import { ArrowDown, ArrowUp, ArrowUpDown, Calculator, ChevronLeft, ChevronRight, Download, ExternalLink, Loader2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, Bot, Calculator, ChevronLeft, ChevronRight, Download, ExternalLink, Loader2, Users, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { supportedChainNames } from "@/lib/chains"
+import { EMPTY_FACTS, annotateTrades, routersToCheck, type WalletFacts } from "@/lib/annotate"
 import { csvFilename, tradesToCsv } from "@/lib/csv"
 import {
   compareDecimal,
@@ -23,6 +24,8 @@ import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 
 const MAX_TRADES = 20000
 const PAGE_SIZES = [25, 50, 100, 250]
+const WALLET_BATCH = 12
+const WALLET_ROUTER_LIMIT = 120
 
 type Phase = "idle" | "loading" | "done" | "error"
 type SideFilter = "ALL" | "BUY" | "SELL" | "ADD" | "REMOVE"
@@ -43,6 +46,7 @@ type SortKey =
   | "baseAmount"
   | "quoteAmount"
   | "selected"
+  | "others"
   | "baseReserve"
   | "quoteReserve"
   | "maker"
@@ -65,6 +69,12 @@ type Income = {
   sold: string
   net: string
   usd: string | null
+}
+
+type WalletAnswer = {
+  contracts?: WalletFacts["contracts"]
+  deployer?: string | null
+  failed?: string[]
 }
 
 type FunderMap = Record<string, { address: string; label: string }>
@@ -93,7 +103,8 @@ export function Exporter() {
   const [error, setError] = useState<string | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
   const [pool, setPool] = useState<PoolView | null>(null)
-  const [trades, setTrades] = useState<Trade[]>([])
+  const [rawTrades, setTrades] = useState<Trade[]>([])
+  const [facts, setFacts] = useState<WalletFacts>(EMPTY_FACTS)
   const [progress, setProgress] = useState("")
   const [capped, setCapped] = useState(false)
   const [filter, setFilter] = useState<SideFilter>("ALL")
@@ -108,6 +119,39 @@ export function Exporter() {
   const run = useRef(0)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [income, setIncome] = useState<Income | null>(null)
+
+  async function lookUpWalletFacts(chainId: string, view: PoolView, loaded: Trade[], token: number) {
+    const routers = routersToCheck(loaded, view.address, WALLET_ROUTER_LIMIT)
+    const batches = chunk(routers, WALLET_BATCH)
+    if (batches.length === 0) batches.push([])
+    let next = 0
+    const worker = async () => {
+      while (next < batches.length && run.current === token) {
+        const index = next
+        next += 1
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            const response: Response = await fetch("/api/wallets", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ chain: chainId, addresses: batches[index], token: index === 0 ? view.baseAddress : null }),
+            })
+            const body = await readJson<WalletAnswer>(response, "Could not look up wallets.")
+            if (!response.ok) throw new Error(body.error || "Could not look up wallets.")
+            if (run.current !== token) return
+            setFacts((current) => ({
+              contracts: { ...current.contracts, ...(body.contracts ?? {}) },
+              deployer: body.deployer ?? current.deployer,
+            }))
+            break
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 2500))
+          }
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: 2 }, worker))
+  }
 
   async function lookUpFunders(chainId: string, makers: string[], token: number) {
     let pending = [...new Set(makers.map((maker) => maker.toLowerCase()).filter(Boolean))]
@@ -170,6 +214,7 @@ export function Exporter() {
     setCapped(false)
     setPool(null)
     setTrades([])
+    setFacts(EMPTY_FACTS)
     setFunder("")
     setSelected(new Set())
     setIncome(null)
@@ -182,6 +227,7 @@ export function Exporter() {
       const loaded: Trade[] = []
       const seen = new Set<string>()
       let chainId = ""
+      let poolView: PoolView | null = null
       do {
         let body: SwapsResponse & { error?: string } | null = null
         let failure = "Could not load swaps."
@@ -207,6 +253,7 @@ export function Exporter() {
         }
         if (!body) throw new Error(failure)
         chainId = body.pool.chainId
+        poolView = body.pool
         setPool(body.pool)
         if (body.warning) setWarning(body.warning)
         for (const trade of body.trades) {
@@ -227,6 +274,7 @@ export function Exporter() {
         }
       } while (cursor)
       setPhase("done")
+      if (poolView) void lookUpWalletFacts(chainId, poolView, loaded, token)
       void lookUpFunders(
         chainId,
         loaded.map((trade) => trade.maker),
@@ -238,6 +286,11 @@ export function Exporter() {
       setError(loadError instanceof Error ? loadError.message : "Could not load swaps.")
     }
   }
+
+  const trades = useMemo(
+    () => annotateTrades(rawTrades, pool?.address ?? "", facts),
+    [rawTrades, pool?.address, facts],
+  )
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -258,6 +311,9 @@ export function Exporter() {
       if (sortKey === "selected") {
         const diff = Number(selected.has(a.id)) - Number(selected.has(b.id))
         return diff * direction || compareTrades(b, a, "timestamp")
+      }
+      if (sortKey === "others") {
+        return (tagWeight(a) - tagWeight(b)) * direction || compareTrades(b, a, "timestamp")
       }
       const missingA = isMissing(a, sortKey)
       const missingB = isMissing(b, sortKey)
@@ -605,7 +661,7 @@ export function Exporter() {
 
           <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1420px] border-collapse text-sm">
+              <table className="w-full min-w-[1560px] border-collapse text-sm">
                 <caption className="sr-only">
                   Swaps for {pool.baseSymbol} / {pool.quoteSymbol}
                 </caption>
@@ -643,12 +699,13 @@ export function Exporter() {
                     <SortHeader label={`Pool ${pool.quoteSymbol}`} column="quoteReserve" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label="Maker" column="maker" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Funded by" column="fundedBy" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
+                    <SortHeader label="Others" column="others" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                   </tr>
                 </thead>
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={12} className="px-4 py-16 text-center text-muted-foreground">
+                      <td colSpan={13} className="px-4 py-16 text-center text-muted-foreground">
                         {phase === "loading"
                           ? "Reading pool logs…"
                           : trades.length === 0
@@ -688,27 +745,33 @@ export function Exporter() {
                         <td className="px-3 py-2 text-right font-mono text-xs" title={trade.quoteReserve ?? "Pool size unavailable"}>
                           {trade.quoteReserve ? formatPoolSize(trade.quoteReserve) : "—"}
                         </td>
-                        <td className="px-3 py-2">
+                        <td className="px-3 py-2 whitespace-nowrap">
                           {trade.maker ? (
-                            <a
-                              className="font-mono text-xs hover:text-primary"
-                              href={`${pool.explorerAddress}/${trade.maker}`}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {shortAddress(trade.maker)}
-                            </a>
+                            <>
+                              <a
+                                className="font-mono text-xs hover:text-primary"
+                                href={`${pool.explorerAddress}/${trade.maker}`}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {shortAddress(trade.maker)}
+                              </a>
+                              <button
+                                type="button"
+                                className="ml-2 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-accent"
+                                title={`${trade.makerTxCount.toLocaleString("en-US")} transaction${trade.makerTxCount === 1 ? "" : "s"} by this wallet in this pool. Click to show only this wallet.`}
+                                aria-label={`Show only the ${trade.makerTxCount} transactions by ${trade.maker}`}
+                                onClick={() => {
+                                  setQuery(trade.maker)
+                                  setPage(0)
+                                }}
+                              >
+                                {trade.makerTxCount.toLocaleString("en-US")}
+                              </button>
+                            </>
                           ) : (
                             "—"
                           )}
-                          <a
-                            className="ml-2 text-xs text-muted-foreground hover:text-foreground"
-                            href={`${pool.explorerTx}/${trade.txHash}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            tx
-                          </a>
                         </td>
                         <td className="px-3 py-2">
                           {trade.fundedBy && trade.fundedByAddress ? (
@@ -723,6 +786,36 @@ export function Exporter() {
                           ) : (
                             "—"
                           )}
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-2">
+                            {trade.makerTags.includes("bot") ? (
+                              <span
+                                className="text-amber-400"
+                                title="Bot / Smart contract: this transaction went straight to the pool or through a contract with unpublished source code."
+                              >
+                                <Bot className="size-4" aria-label="Bot or smart contract" />
+                              </span>
+                            ) : null}
+                            {trade.makerTags.includes("team") ? (
+                              <span
+                                className="text-amber-400"
+                                title="Team wallet: deployed this token or added the pool’s first liquidity."
+                              >
+                                <Users className="size-4" aria-label="Team wallet" />
+                              </span>
+                            ) : null}
+                            <a
+                              className="text-muted-foreground hover:text-foreground"
+                              href={`${pool.explorerTx}/${trade.txHash}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              title="Open this transaction on the explorer"
+                              aria-label={`Open transaction ${trade.txHash} on the explorer`}
+                            >
+                              <ExternalLink className="size-4" />
+                            </a>
+                          </span>
                         </td>
                       </tr>
                     ))
@@ -793,7 +886,7 @@ export function Exporter() {
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes every row that matches the filters, not only the current page
-            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
+            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (
@@ -844,8 +937,12 @@ function summarize(trades: Trade[]) {
   }
 }
 
+function tagWeight(trade: Trade): number {
+  return (trade.makerTags.includes("bot") ? 2 : 0) + (trade.makerTags.includes("team") ? 1 : 0)
+}
+
 function isMissing(trade: Trade, key: SortKey): boolean {
-  if (key === "selected") return false
+  if (key === "selected" || key === "others") return false
   if (key === "fundedBy") return !trade.fundedBy
   if (key === "maker") return !trade.maker
   if (key === "timestamp" || key === "type") return false
@@ -856,7 +953,7 @@ function compareTrades(a: Trade, b: Trade, key: SortKey): number {
   if (key === "timestamp") return a.timestamp.localeCompare(b.timestamp) || a.logIndex - b.logIndex
   if (key === "type" || key === "maker") return a[key].localeCompare(b[key])
   if (key === "fundedBy") return (a.fundedBy || "").localeCompare(b.fundedBy || "")
-  if (key === "selected") return 0
+  if (key === "selected" || key === "others") return 0
   return compareDecimal(a[key] ?? "0", b[key] ?? "0")
 }
 

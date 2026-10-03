@@ -10,7 +10,7 @@ The app reads `Swap`, `Mint` (liquidity added) and `Burn` (liquidity removed) ev
 
 ## CSV columns
 
-`date_utc`, `type` (`BUY`, `SELL`, `ADD` or `REMOVE`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+`date_utc`, `type` (`BUY`, `SELL`, `ADD` or `REMOVE`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `maker_tx_count`, `maker_tags`, `tx_to`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
 
 `funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
@@ -65,3 +65,11 @@ Every row shows how much of each token the pool held right after that transactio
 - Uniswap V2 style pools emit a `Sync(reserve0, reserve1)` event immediately before every `Swap`, `Mint` and `Burn`, so the value is the exact reserve after that trade.
 - Uniswap V3 style pools emit no reserves, so the value is the pool's token balances at the end of the swap's block (read with archive `eth_call`s). Several swaps in one block share the same value.
 - If a chain's public RPCs cannot serve the data, the cell shows a dash and the CSV cell is empty. Swap data is unaffected.
+
+## Maker transaction count and Bot / Team icons
+
+- The number next to each maker is how many transactions (swaps and liquidity events) that wallet made in this pool, counted from the rows loaded. Click it to show only that wallet. In the CSV it is `maker_tx_count`.
+- The **Others** column shows icons, also written to `maker_tags` in the CSV (`bot`, `team`, or `bot;team`):
+  - Bot / Smart contract: the transaction was sent straight to the pool, or through a contract whose source code is not published on the explorer. Public DEX routers are verified, private MEV and sniper contracts almost never are. `tx_to` in the CSV is the contract that received the transaction.
+  - Team wallet: the wallet that deployed the base token, or the wallet that added the pool's first liquidity.
+- These tags are heuristics built from public explorer data. DEXTools uses its own labelling, so a few wallets can be tagged differently. The most frequent 120 contracts are checked per export; less common ones are left untagged.

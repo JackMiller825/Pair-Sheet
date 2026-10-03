@@ -1,3 +1,5 @@
+export type MakerTag = "bot" | "team"
+
 export type Side = "BUY" | "SELL" | "ADD" | "REMOVE"
 
 export type TokenInfo = {
@@ -55,6 +57,9 @@ export type Trade = {
   baseReserve: string | null
   quoteReserve: string | null
   maker: string
+  router: string
+  makerTxCount: number
+  makerTags: MakerTag[]
   txHash: string
   fundedBy: string | null
   fundedByAddress: string | null

@@ -302,7 +302,10 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       quoteReserve: size?.quote ?? null,
       totalUsd: usd,
       priceUsd: usd && !oneSided ? priceUsdFromTotal(usd, baseAmount) : null,
-      maker: makers.get(log.txHash.toLowerCase()) ?? "",
+      maker: makers.get(log.txHash.toLowerCase())?.from ?? "",
+      router: makers.get(log.txHash.toLowerCase())?.to ?? "",
+      makerTxCount: 0,
+      makerTags: [],
       txHash: log.txHash,
       fundedBy: null,
       fundedByAddress: null,
@@ -317,9 +320,11 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
   return trades
 }
 
-async function resolveMakers(chain: ChainConfig, hashes: string[]): Promise<Map<string, string>> {
+type TxParties = { from: string; to: string }
+
+async function resolveMakers(chain: ChainConfig, hashes: string[]): Promise<Map<string, TxParties>> {
   const unique = [...new Set(hashes.map((hash) => hash.toLowerCase()))]
-  const makers = new Map<string, string>()
+  const makers = new Map<string, TxParties>()
   if (chain.rpcs.length > 0) {
     await fillFromRpc(chain.rpcs, unique, makers)
   }
@@ -330,7 +335,7 @@ async function resolveMakers(chain: ChainConfig, hashes: string[]): Promise<Map<
   return makers
 }
 
-async function fillFromRpc(rpcs: string[], hashes: string[], makers: Map<string, string>) {
+async function fillFromRpc(rpcs: string[], hashes: string[], makers: Map<string, TxParties>) {
   const size = 25
   const batches: string[][] = []
   for (let index = 0; index < hashes.length; index += size) {
@@ -344,8 +349,8 @@ async function fillFromRpc(rpcs: string[], hashes: string[], makers: Map<string,
           batch.map((hash) => ({ method: "eth_getTransactionByHash", params: [hash] })),
         )
         results.forEach((result, id) => {
-          const from = (result as { from?: string } | undefined)?.from
-          if (from && batch[id]) makers.set(batch[id], from.toLowerCase())
+          const tx = result as { from?: string; to?: string | null } | undefined
+          if (tx?.from && batch[id]) makers.set(batch[id], { from: tx.from.toLowerCase(), to: (tx.to ?? "").toLowerCase() })
         })
         if (batch.every((hash) => makers.has(hash))) return
       } catch {
@@ -355,14 +360,16 @@ async function fillFromRpc(rpcs: string[], hashes: string[], makers: Map<string,
   })
 }
 
-async function fillFromBlockscout(host: string, hashes: string[], makers: Map<string, string>) {
+async function fillFromBlockscout(host: string, hashes: string[], makers: Map<string, TxParties>) {
   await mapPool(hashes, 6, async (hash) => {
     try {
       const body = (await fetchJson(`${host}/api/v2/transactions/${hash}`)) as {
         from?: { hash?: string } | string
+        to?: { hash?: string } | string | null
       }
       const from = typeof body.from === "string" ? body.from : body.from?.hash
-      if (from) makers.set(hash, from.toLowerCase())
+      const to = typeof body.to === "string" ? body.to : body.to?.hash
+      if (from) makers.set(hash, { from: from.toLowerCase(), to: (to ?? "").toLowerCase() })
     } catch {
       return
     }

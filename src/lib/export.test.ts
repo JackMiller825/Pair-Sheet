@@ -12,6 +12,7 @@ import {
   totalUsd,
 } from "./format"
 import { earliestIncoming, funderLabel, type FundingRow } from "./funded"
+import { annotateTrades, routersToCheck } from "./annotate"
 import { assignSync, recordSync, swapKey, type SyncEvent } from "./reserves"
 import { EXAMPLE_URL, parseDextoolsUrl } from "./parse-url"
 import type { PoolContext, PoolView, RawLog, Trade } from "./types"
@@ -136,6 +137,9 @@ test("writes an excel-friendly csv", () => {
     baseReserve: "1234.5",
     quoteReserve: "0.0000099",
     maker: "0x591f85c11cafea17f7cc926f13e2ed7c794f2522",
+    router: "0x7a250d5630b4cf539739df2c5dacb4c659f2488d",
+    makerTxCount: 40,
+    makerTags: ["bot", "team"],
     txHash: "0xabc,def",
     fundedBy: "Disperse.app",
     fundedByAddress: "0xd152f549545093347a162dce210e7293f1452150",
@@ -145,6 +149,7 @@ test("writes an excel-friendly csv", () => {
   assert.match(csv, /date_utc,type,price_usd,total_usd/)
   assert.match(csv, /quote_amount,pool_base_after,pool_quote_after,maker/)
   assert.match(csv, /4\.45892281616295148,1234\.5,0\.0000099,0x591f/)
+  assert.match(csv, /,40,bot;team,0x7a250d56/)
   assert.match(csv, /"0xabc,def"/)
   assert.match(csv, /Disperse\.app,0xd152f549545093347a162dce210e7293f1452150/)
   assert.equal(csvFilename(view), "fwog-weth-ether-swaps.csv")
@@ -242,4 +247,50 @@ test("decodes liquidity adds and removes", () => {
   assert.deepEqual(burn, { type: "REMOVE", baseRaw: 0n, quoteRaw: 7n })
   assert.equal(decodeSwap(log(BURN_V3_TOPIC, [999n, 0n, 0n]), pool), null)
   assert.equal(liquidityTopics(SWAP_V2_TOPIC).length, 2)
+})
+
+test("counts wallet transactions and tags bots and team wallets", () => {
+  const base = {
+    timestamp: "2024-08-04T15:54:23.000Z",
+    priceUsd: null,
+    totalUsd: null,
+    priceQuote: null,
+    baseAmount: "1",
+    quoteAmount: "1",
+    baseReserve: null,
+    quoteReserve: null,
+    fundedBy: null,
+    fundedByAddress: null,
+    txHash: "0x1",
+  }
+  const lp = "0x1111111111111111111111111111111111111111"
+  const dev = "0x2222222222222222222222222222222222222222"
+  const user = "0x3333333333333333333333333333333333333333"
+  const router = "0x4444444444444444444444444444444444444444"
+  const botContract = "0x5555555555555555555555555555555555555555"
+  const make = (id: string, type: Trade["type"], maker: string, to: string, block: number): Trade => ({
+    ...base,
+    id,
+    type,
+    maker,
+    router: to,
+    makerTxCount: 0,
+    makerTags: [],
+    blockNumber: block,
+    logIndex: 1,
+  })
+  const trades = [
+    make("a", "ADD", lp, router, 10),
+    make("b", "BUY", user, router, 11),
+    make("c", "SELL", user, botContract, 12),
+    make("d", "BUY", dev, router, 13),
+  ]
+  const facts = {
+    contracts: { [router]: { contract: true, verified: true }, [botContract]: { contract: true, verified: false } },
+    deployer: dev,
+  }
+  const out = annotateTrades(trades, pool.address, facts)
+  assert.deepEqual(out.map((trade) => trade.makerTxCount), [1, 2, 2, 1])
+  assert.deepEqual(out.map((trade) => trade.makerTags), [["team"], [], ["bot"], ["team"]])
+  assert.deepEqual(routersToCheck(trades, pool.address, 1), [router])
 })
