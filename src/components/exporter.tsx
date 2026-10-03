@@ -1,7 +1,7 @@
 "use client"
 
 import { useMemo, useRef, useState } from "react"
-import { ArrowDown, ArrowUp, Calculator, Download, ExternalLink, Loader2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, ArrowUpDown, Calculator, ChevronLeft, ChevronRight, Download, ExternalLink, Loader2, X } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -22,6 +22,7 @@ import { EXAMPLE_URL } from "@/lib/parse-url"
 import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 
 const MAX_TRADES = 20000
+const PAGE_SIZES = [25, 50, 100, 250]
 
 type Phase = "idle" | "loading" | "done" | "error"
 type SideFilter = "ALL" | "BUY" | "SELL" | "ADD" | "REMOVE"
@@ -41,6 +42,7 @@ type SortKey =
   | "priceQuote"
   | "baseAmount"
   | "quoteAmount"
+  | "selected"
   | "baseReserve"
   | "quoteReserve"
   | "maker"
@@ -99,6 +101,8 @@ export function Exporter() {
   const [funder, setFunder] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("timestamp")
   const [sortDesc, setSortDesc] = useState(true)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState(50)
   const [copied, setCopied] = useState(false)
   const [funding, setFunding] = useState<{ done: number; total: number } | null>(null)
   const run = useRef(0)
@@ -170,6 +174,7 @@ export function Exporter() {
     setSelected(new Set())
     setIncome(null)
     setFunding(null)
+    setPage(0)
     setProgress("Reading transactions from the chain…")
 
     try {
@@ -248,9 +253,27 @@ export function Exporter() {
         (trade.fundedByAddress ?? "").includes(needle)
       )
     })
-    const sorted = [...rows].sort((a, b) => compareTrades(a, b, sortKey) * (sortDesc ? -1 : 1))
-    return sorted
-  }, [trades, filter, funder, query, sortKey, sortDesc])
+    const direction = sortDesc ? -1 : 1
+    return [...rows].sort((a, b) => {
+      if (sortKey === "selected") {
+        const diff = Number(selected.has(a.id)) - Number(selected.has(b.id))
+        return diff * direction || compareTrades(b, a, "timestamp")
+      }
+      const missingA = isMissing(a, sortKey)
+      const missingB = isMissing(b, sortKey)
+      if (missingA !== missingB) return missingA ? 1 : -1
+      return compareTrades(a, b, sortKey) * direction
+    })
+  }, [trades, filter, funder, query, sortKey, sortDesc, selected])
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const currentPage = Math.min(page, pageCount - 1)
+  const pageRows = useMemo(
+    () => filtered.slice(currentPage * pageSize, (currentPage + 1) * pageSize),
+    [filtered, currentPage, pageSize],
+  )
+  const firstShown = filtered.length === 0 ? 0 : currentPage * pageSize + 1
+  const lastShown = Math.min(filtered.length, (currentPage + 1) * pageSize)
 
   const funders = useMemo(() => {
     const counts = new Map<string, { label: string; count: number }>()
@@ -265,8 +288,9 @@ export function Exporter() {
 
   const stats = useMemo(() => summarize(trades), [trades])
 
-  const allVisibleSelected = filtered.length > 0 && filtered.every((trade) => selected.has(trade.id))
-  const someVisibleSelected = filtered.some((trade) => selected.has(trade.id))
+  const allVisibleSelected = pageRows.length > 0 && pageRows.every((trade) => selected.has(trade.id))
+  const someVisibleSelected = pageRows.some((trade) => selected.has(trade.id))
+  const allMatchingSelected = filtered.length > 0 && filtered.every((trade) => selected.has(trade.id))
 
   function changeSelection(update: (draft: Set<string>) => void) {
     setSelected((current) => {
@@ -285,10 +309,16 @@ export function Exporter() {
 
   function toggleVisible() {
     changeSelection((draft) => {
-      for (const trade of filtered) {
+      for (const trade of pageRows) {
         if (allVisibleSelected) draft.delete(trade.id)
         else draft.add(trade.id)
       }
+    })
+  }
+
+  function selectAllMatching() {
+    changeSelection((draft) => {
+      for (const trade of filtered) draft.add(trade.id)
     })
   }
 
@@ -315,12 +345,13 @@ export function Exporter() {
   }
 
   function toggleSort(key: SortKey) {
+    setPage(0)
     if (sortKey === key) {
       setSortDesc((value) => !value)
       return
     }
     setSortKey(key)
-    setSortDesc(key === "maker" || key === "type" || key === "fundedBy" ? false : true)
+    setSortDesc(key !== "maker" && key !== "type" && key !== "fundedBy")
   }
 
   function download() {
@@ -354,7 +385,7 @@ export function Exporter() {
           </div>
         </div>
         <p className="max-w-2xl text-base text-muted-foreground sm:text-lg">
-          Paste a DEXTools pair link. Pair Sheet reads every buy and sell from the pool contract and saves the tape as CSV.
+          Paste a DEXTools pair link. Pair Sheet reads every buy, sell, liquidity add and remove from the pool contract, shows the pool size and the funding wallet behind each transaction, and exports the full history as CSV.
         </p>
       </header>
 
@@ -384,20 +415,6 @@ export function Exporter() {
             {phase === "loading" ? <Loader2 className="animate-spin" /> : null}
             {phase === "loading" ? "Reading chain" : "Load swaps"}
           </Button>
-        </div>
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <button
-            type="button"
-            className="rounded-full bg-muted px-3 py-1 text-foreground hover:bg-accent disabled:opacity-50"
-            disabled={phase === "loading"}
-            onClick={() => {
-              setUrl(EXAMPLE_URL)
-              void load(EXAMPLE_URL)
-            }}
-          >
-            Try the FWOG / WETH example
-          </button>
-          <span>Ethereum, Base, Arbitrum, Polygon, Optimism, and other EVM pools.</span>
         </div>
       </form>
 
@@ -475,7 +492,10 @@ export function Exporter() {
                   type="button"
                   aria-pressed={filter === side}
                   className={`rounded-md px-3 py-1.5 text-sm font-medium ${filter === side ? "bg-background text-foreground" : "text-muted-foreground"}`}
-                  onClick={() => setFilter(side)}
+                  onClick={() => {
+                    setFilter(side)
+                    setPage(0)
+                  }}
                 >
                   {FILTER_LABELS[side]}
                 </button>
@@ -486,7 +506,10 @@ export function Exporter() {
               <select
                 aria-label="Filter by funded by"
                 value={funder}
-                onChange={(event) => setFunder(event.target.value)}
+                onChange={(event) => {
+                  setFunder(event.target.value)
+                  setPage(0)
+                }}
                 className="h-9 max-w-56 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
               >
                 <option value="">All</option>
@@ -499,7 +522,10 @@ export function Exporter() {
             </label>
             <Input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                setPage(0)
+              }}
               placeholder="Filter by maker, funder, or tx"
               className="h-9 sm:max-w-xs"
               spellCheck={false}
@@ -516,6 +542,15 @@ export function Exporter() {
                 ? "Tick transactions in the table, then calculate the WETH total."
                 : `${selected.size.toLocaleString("en-US")} transaction${selected.size === 1 ? "" : "s"} selected`}
             </p>
+            {filtered.length > pageRows.length && !allMatchingSelected ? (
+              <button
+                type="button"
+                className="inline-flex items-center rounded-full bg-muted px-3 py-1 text-sm text-foreground hover:bg-accent"
+                onClick={selectAllMatching}
+              >
+                Select all {filtered.length.toLocaleString("en-US")} matching
+              </button>
+            ) : null}
             {selected.size > 0 ? (
               <button
                 type="button"
@@ -576,18 +611,26 @@ export function Exporter() {
                 </caption>
                 <thead className="bg-muted/70 text-left text-xs tracking-wide text-muted-foreground uppercase">
                   <tr>
-                    <th className="w-10 px-3 py-2">
+                    <th className="w-10 px-3 py-2" aria-sort={sortKey === "selected" ? (sortDesc ? "descending" : "ascending") : "none"}>
                       <input
                         type="checkbox"
-                        aria-label="Select all shown transactions"
+                        aria-label="Select all transactions on this page"
                         className="size-4 cursor-pointer accent-[var(--primary)]"
                         checked={allVisibleSelected}
                         ref={(node) => {
                           if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected
                         }}
                         onChange={toggleVisible}
-                        disabled={filtered.length === 0}
+                        disabled={pageRows.length === 0}
                       />
+                      <button
+                        type="button"
+                        className="mt-1 inline-flex items-center text-muted-foreground hover:text-foreground"
+                        aria-label="Sort by selected"
+                        onClick={() => toggleSort("selected")}
+                      >
+                        {sortKey === "selected" ? sortDesc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-50" />}
+                      </button>
                     </th>
                     <SortHeader label="Date (UTC)" column="timestamp" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Type" column="type" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
@@ -614,7 +657,7 @@ export function Exporter() {
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((trade) => (
+                    pageRows.map((trade) => (
                       <tr
                         key={trade.id}
                         className={`border-t border-border/80 hover:bg-muted/40 ${selected.has(trade.id) ? "bg-primary/10" : ""}`}
@@ -688,17 +731,76 @@ export function Exporter() {
               </table>
             </div>
           </div>
+          <nav
+            aria-label="Pagination"
+            className="flex flex-col gap-3 rounded-2xl bg-card px-4 py-3 text-sm ring-1 ring-foreground/10 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <p className="text-muted-foreground" aria-live="polite">
+              Showing {firstShown.toLocaleString("en-US")}–{lastShown.toLocaleString("en-US")} of {filtered.length.toLocaleString("en-US")}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-muted-foreground">
+                Rows per page
+                <select
+                  aria-label="Rows per page"
+                  value={pageSize}
+                  onChange={(event) => {
+                    setPageSize(Number(event.target.value))
+                    setPage(0)
+                  }}
+                  className="h-9 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
+                >
+                  {PAGE_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {size}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="flex items-center gap-1">
+                <Button type="button" variant="outline" size="sm" onClick={() => setPage(0)} disabled={currentPage === 0}>
+                  First
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Previous page"
+                  onClick={() => setPage(currentPage - 1)}
+                  disabled={currentPage === 0}
+                >
+                  <ChevronLeft />
+                </Button>
+                <span className="px-2 font-mono text-xs text-muted-foreground">
+                  Page {(currentPage + 1).toLocaleString("en-US")} of {pageCount.toLocaleString("en-US")}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  aria-label="Next page"
+                  onClick={() => setPage(currentPage + 1)}
+                  disabled={currentPage >= pageCount - 1}
+                >
+                  <ChevronRight />
+                </Button>
+                <Button type="button" variant="outline" size="sm" onClick={() => setPage(pageCount - 1)} disabled={currentPage >= pageCount - 1}>
+                  Last
+                </Button>
+              </div>
+            </div>
+          </nav>
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
-            The CSV includes the rows currently shown
+            The CSV includes every row that matches the filters, not only the current page
             {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (
         <section className="grid gap-3 sm:grid-cols-3">
           <Step n="1" title="Paste the pair" body="Use the pair-explorer URL from DEXTools, including the chain and pool address." />
-          <Step n="2" title="Read the tape" body="Buys and sells are decoded from the pool’s Swap logs, with the wallet that sent each transaction." />
-          <Step n="3" title="Save the CSV" body="Date, side, USD price, total, both token amounts, maker, who funded that wallet, and transaction hash." />
+          <Step n="2" title="Read the tape" body="Buys, sells, adds and removes are decoded from the pool’s logs, with the wallet that sent each transaction and the pool size after it." />
+          <Step n="3" title="Save the CSV" body="Date, type, USD price, total, both token amounts, pool size, maker, who funded that wallet, and transaction hash." />
         </section>
       ) : null}
     </div>
@@ -742,13 +844,20 @@ function summarize(trades: Trade[]) {
   }
 }
 
+function isMissing(trade: Trade, key: SortKey): boolean {
+  if (key === "selected") return false
+  if (key === "fundedBy") return !trade.fundedBy
+  if (key === "maker") return !trade.maker
+  if (key === "timestamp" || key === "type") return false
+  return trade[key] === null
+}
+
 function compareTrades(a: Trade, b: Trade, key: SortKey): number {
   if (key === "timestamp") return a.timestamp.localeCompare(b.timestamp) || a.logIndex - b.logIndex
   if (key === "type" || key === "maker") return a[key].localeCompare(b[key])
   if (key === "fundedBy") return (a.fundedBy || "").localeCompare(b.fundedBy || "")
-  const left = a[key] || "0"
-  const right = b[key] || "0"
-  return compareDecimal(left, right)
+  if (key === "selected") return 0
+  return compareDecimal(a[key] ?? "0", b[key] ?? "0")
 }
 
 function SortHeader({
@@ -768,10 +877,13 @@ function SortHeader({
 }) {
   const active = sortKey === column
   return (
-    <th className={`px-3 py-2 font-medium ${align === "right" ? "text-right" : "text-left"}`}>
+    <th
+      className={`px-3 py-2 font-medium ${align === "right" ? "text-right" : "text-left"}`}
+      aria-sort={active ? (desc ? "descending" : "ascending") : "none"}
+    >
       <button type="button" className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`} onClick={() => onSort(column)}>
         {label}
-        {active ? desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : null}
+        {active ? desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-40" />}
       </button>
     </th>
   )

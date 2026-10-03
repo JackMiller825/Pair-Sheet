@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Pair Sheet",
-  description: "Paste a DEXTools pair link and download every buy and sell as CSV.",
+  description: "Paste a DEXTools pair link and export every buy, sell, liquidity add and remove, with pool size and funding wallet, as CSV.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

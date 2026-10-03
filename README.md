@@ -1,6 +1,6 @@
 # Pair Sheet
 
-Paste a [DEXTools](https://www.dextools.io) pair-explorer link and download every buy and sell on that pool as CSV.
+Paste a [DEXTools](https://www.dextools.io) pair-explorer link and download every buy, sell, liquidity add and remove on that pool as CSV, with the pool size after each transaction and the wallet that funded each maker.
 
 Example:
 
