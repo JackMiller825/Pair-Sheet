@@ -429,7 +429,7 @@ export function Exporter() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-8 sm:px-6 lg:py-10">
+    <div className="flex w-full flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8 lg:py-10 2xl:px-12">
       <header className="flex flex-col gap-4">
         <div className="flex items-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-primary text-primary-foreground shadow-[0_0_0_6px_oklch(0.82_0.12_190/0.12)]">
@@ -440,7 +440,7 @@ export function Exporter() {
             <h1 className="font-heading text-3xl font-semibold tracking-tight">Pair Sheet</h1>
           </div>
         </div>
-        <p className="max-w-2xl text-base text-muted-foreground sm:text-lg">
+        <p className="max-w-3xl text-base text-muted-foreground sm:text-lg">
           Paste a DEXTools pair link. Pair Sheet reads every buy, sell, liquidity add and remove from the pool contract, shows the pool size and the funding wallet behind each transaction, and exports the full history as CSV.
         </p>
       </header>
