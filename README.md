@@ -10,7 +10,7 @@ The app reads `Swap` events from the pool contract (Uniswap v2 and v3 style), re
 
 ## CSV columns
 
-`date_utc`, `type` (`BUY` or `SELL`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+`date_utc`, `type` (`BUY` or `SELL`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
 
 `funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
@@ -57,3 +57,11 @@ A locale segment is fine: `/app/en/ether/pair-explorer/0x…`.
 ## Calculate Income
 
 Tick the checkbox on any rows (or the header box to tick everything currently shown), then press **Calculate Income**. The panel shows the exact sum of the quote token (WETH on this pool) across the selected transactions, split into bought and sold, plus net (sold minus bought) and the USD value at trade time. Selections survive filter changes; changing the selection clears the old result so it never shows a stale number.
+
+## Pool size after each swap
+
+Every row shows how much of each token the pool held right after that swap (the "Pool FWOG" and "Pool WETH" columns, and `pool_base_after` / `pool_quote_after` in the CSV). The cells are rounded; hover for the exact value.
+
+- Uniswap V2 style pools emit a `Sync(reserve0, reserve1)` event immediately before every `Swap`, so the value is the exact reserve after that trade.
+- Uniswap V3 style pools emit no reserves, so the value is the pool's token balances at the end of the swap's block (read with archive `eth_call`s). Several swaps in one block share the same value.
+- If a chain's public RPCs cannot serve the data, the cell shows a dash and the CSV cell is empty. Swap data is unaffected.

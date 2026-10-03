@@ -11,8 +11,9 @@ import {
   totalUsd,
 } from "./format"
 import { earliestIncoming, funderLabel, type FundingRow } from "./funded"
+import { assignSync, recordSync, swapKey, type SyncEvent } from "./reserves"
 import { EXAMPLE_URL, parseDextoolsUrl } from "./parse-url"
-import type { PoolContext, PoolView, Trade } from "./types"
+import type { PoolContext, PoolView, RawLog, Trade } from "./types"
 
 const pool: PoolContext = {
   chainId: "ether",
@@ -131,6 +132,8 @@ test("writes an excel-friendly csv", () => {
     priceQuote: "0.000000000000044589",
     baseAmount: "100000000000000",
     quoteAmount: "4.45892281616295148",
+    baseReserve: "1234.5",
+    quoteReserve: "0.0000099",
     maker: "0x591f85c11cafea17f7cc926f13e2ed7c794f2522",
     txHash: "0xabc,def",
     fundedBy: "Disperse.app",
@@ -139,6 +142,8 @@ test("writes an excel-friendly csv", () => {
   const csv = tradesToCsv(view, [trade])
   assert.equal(csv.startsWith("\uFEFF"), true)
   assert.match(csv, /date_utc,type,price_usd,total_usd/)
+  assert.match(csv, /quote_amount,pool_base_after,pool_quote_after,maker/)
+  assert.match(csv, /4\.45892281616295148,1234\.5,0\.0000099,0x591f/)
   assert.match(csv, /"0xabc,def"/)
   assert.match(csv, /Disperse\.app,0xd152f549545093347a162dce210e7293f1452150/)
   assert.equal(csvFilename(view), "fwog-weth-ether-swaps.csv")
@@ -187,4 +192,28 @@ test("sums WETH amounts exactly", () => {
   assert.equal(sumDecimals(["4.45892281616295148", "0.3", "1"]), "5.75892281616295148")
   assert.equal(sumDecimals(["10", "-2.5"]), "7.5")
   assert.equal(sumDecimals([]), "0")
+})
+
+test("reads the pool size from the Sync event right before each swap", () => {
+  const word = (value: bigint) => value.toString(16).padStart(64, "0")
+  const hash = "0xAA11"
+  const byTx = new Map<string, SyncEvent[]>()
+  recordSync(byTx, hash, 205, `0x${word(5n * 10n ** 18n)}${word(2n * 10n ** 18n)}`)
+  recordSync(byTx, hash, 210, `0x${word(7n * 10n ** 18n)}${word(1n * 10n ** 17n)}`)
+  const swap = (logIndex: number): RawLog => ({
+    data: "0x",
+    topics: [SWAP_V2_TOPIC],
+    blockNumber: 1,
+    timestamp: 1,
+    txHash: hash,
+    logIndex,
+  })
+  const sizes = new Map()
+  const flipped = { ...pool, token0: pool.quote.address, token1: pool.base.address }
+  assignSync(flipped, [swap(206), swap(211)], byTx, sizes)
+  assert.deepEqual(sizes.get(swapKey(swap(206))), { base: "2", quote: "5" })
+  assert.deepEqual(sizes.get(swapKey(swap(211))), { base: "0.1", quote: "7" })
+  const direct = new Map()
+  assignSync({ ...pool, token0: pool.base.address, token1: pool.quote.address }, [swap(206)], byTx, direct)
+  assert.deepEqual(direct.get(swapKey(swap(206))), { base: "5", quote: "2" })
 })

@@ -5,6 +5,8 @@ import { AppError, fetchJson, mapPool, rpcBatch } from "./http"
 import { parseDextoolsUrl } from "./parse-url"
 import { resolvePool } from "./pool"
 import { quotePricesAt } from "./prices"
+import { loadPoolSizes } from "./reserves"
+import type { PoolSize } from "./reserves"
 import type { PoolContext, PoolView, RawLog, SwapsResponse, Trade } from "./types"
 
 const ROUTESCAN_PAGE = 1000
@@ -239,7 +241,7 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
   })
   if (decoded.length === 0) return []
 
-  const [makers, prices] = await Promise.all([
+  const [makers, prices, sizes] = await Promise.all([
     resolveMakers(
       chain,
       decoded.map((row) => row.log.txHash),
@@ -250,10 +252,16 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       pool.quote.symbol,
       decoded.map((row) => row.log.timestamp),
     ),
+    loadPoolSizes(
+      chain,
+      pool,
+      decoded.map((row) => row.log),
+    ).catch(() => new Map<string, PoolSize>()),
   ])
 
   const trades = decoded.map(({ log, swap }) => {
     const quotePrice = prices.get(log.timestamp) ?? null
+    const size = sizes.get(`${log.txHash.toLowerCase()}-${log.logIndex}`)
     const baseAmount = formatUnits(swap.baseRaw, pool.base.decimals)
     const quoteAmount = formatUnits(swap.quoteRaw, pool.quote.decimals)
     const priceQuote = priceInQuote(
@@ -272,6 +280,8 @@ async function hydrate(chain: ChainConfig, pool: PoolContext, logs: RawLog[]): P
       priceQuote,
       baseAmount,
       quoteAmount,
+      baseReserve: size?.base ?? null,
+      quoteReserve: size?.quote ?? null,
       totalUsd: usd,
       priceUsd: usd ? priceUsdFromTotal(usd, baseAmount) : null,
       maker: makers.get(log.txHash.toLowerCase()) ?? "",

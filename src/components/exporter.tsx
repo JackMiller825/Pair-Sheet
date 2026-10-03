@@ -32,6 +32,8 @@ type SortKey =
   | "priceQuote"
   | "baseAmount"
   | "quoteAmount"
+  | "baseReserve"
+  | "quoteReserve"
   | "maker"
   | "fundedBy"
 
@@ -536,7 +538,7 @@ export function Exporter() {
 
           <div className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] border-collapse text-sm">
+              <table className="w-full min-w-[1420px] border-collapse text-sm">
                 <caption className="sr-only">
                   Swaps for {pool.baseSymbol} / {pool.quoteSymbol}
                 </caption>
@@ -562,6 +564,8 @@ export function Exporter() {
                     <SortHeader label={`Price (${pool.quoteSymbol})`} column="priceQuote" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label={pool.baseSymbol} column="baseAmount" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label={pool.quoteSymbol} column="quoteAmount" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
+                    <SortHeader label={`Pool ${pool.baseSymbol}`} column="baseReserve" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
+                    <SortHeader label={`Pool ${pool.quoteSymbol}`} column="quoteReserve" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label="Maker" column="maker" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Funded by" column="fundedBy" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                   </tr>
@@ -569,7 +573,7 @@ export function Exporter() {
                 <tbody>
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-4 py-16 text-center text-muted-foreground">
+                      <td colSpan={12} className="px-4 py-16 text-center text-muted-foreground">
                         {phase === "loading"
                           ? "Reading swap logs…"
                           : trades.length === 0
@@ -603,6 +607,12 @@ export function Exporter() {
                         <td className="px-3 py-2 text-right font-mono text-xs">{trade.priceQuote ? formatTiny(Number(trade.priceQuote)) : "—"}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.baseAmount)}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.quoteAmount)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-xs" title={trade.baseReserve ?? "Pool size unavailable"}>
+                          {trade.baseReserve ? formatGroupedAmount(trade.baseReserve) : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs" title={trade.quoteReserve ?? "Pool size unavailable"}>
+                          {trade.quoteReserve ? formatGroupedAmount(trade.quoteReserve) : "—"}
+                        </td>
                         <td className="px-3 py-2">
                           {trade.maker ? (
                             <a
@@ -649,7 +659,7 @@ export function Exporter() {
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from on-chain Swap events. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes the rows currently shown
-            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
+            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (

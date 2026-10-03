@@ -52,6 +52,8 @@ export type Trade = {
   priceQuote: string | null
   baseAmount: string
   quoteAmount: string
+  baseReserve: string | null
+  quoteReserve: string | null
   maker: string
   txHash: string
   fundedBy: string | null
