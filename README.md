@@ -10,13 +10,13 @@ The app reads `Swap`, `Mint` (liquidity added) and `Burn` (liquidity removed) ev
 
 ## CSV columns
 
-`date_utc`, `type` (`BUY`, `SELL`, `ADD` or `REMOVE`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `maker_tx_count`, `maker_tags`, `tx_to`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
+`date_utc`, `date_local`, `timezone`, `type` (`BUY`, `SELL`, `ADD` or `REMOVE`), `price_usd`, `total_usd`, `price_in_quote`, `base_symbol`, `base_amount`, `quote_symbol`, `quote_amount`, `pool_base_after`, `pool_quote_after`, `maker`, `maker_tx_count`, `maker_tags`, `tx_to`, `funded_by`, `funded_by_address`, `tx_hash`, `block_number`, `log_index`, `chain`, `pool_address`
 
 `funded_by` is the public name of the address that first sent native currency to the maker, the same “Funded by” field Etherscan shows. A known label such as Disperse.app is used when one exists. Otherwise the column shows the contract name, ENS name, or a shortened address. The table has the same Funded by column, and the dropdown above it filters the tape and the CSV to one funder.
 
 Swaps load first, then the page looks up funders in small batches through `/api/funders`, so a slow or rate-limited explorer never fails the whole load. Wallets the explorer could not answer are retried a few times, and Download CSV unlocks when the lookup finishes.
 
-Dates are UTC. `ADD` and `REMOVE` are liquidity events: the two amounts are the tokens deposited or withdrawn, and `total_usd` is the quote-token side. Burns that move nothing (V3 fee pokes) are skipped. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
+`date_utc` is always UTC (ISO 8601). `date_local` is the same moment in the time zone picked in the app (`timezone` column). The table shows times in your browser's local time zone by default; pick another one from the **Time zone** menu above the table and the choice is remembered in the browser. `ADD` and `REMOVE` are liquidity events: the two amounts are the tokens deposited or withdrawn, and `total_usd` is the quote-token side. Burns that move nothing (V3 fee pokes) are skipped. `BUY` means the pool sent the base token out (the trader bought it). The side is taken from the base token GeckoTerminal shows for the pool, usually the non-wrapped asset.
 
 ## Run locally
 

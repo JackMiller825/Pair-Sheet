@@ -5,13 +5,13 @@ import { BURN_V3_TOPIC, MINT_V2_TOPIC, SWAP_V2_TOPIC, decodeAbiString, decodeSwa
 import {
   formatPoolSize,
   formatTiny,
-  formatTradeDate,
   priceInQuote,
   priceUsdFromTotal,
   sumDecimals,
   totalUsd,
 } from "./format"
 import { earliestIncoming, funderLabel, type FundingRow } from "./funded"
+import { formatTradeDate, formatZoned, resolveZone, zoneAbbreviation, zoneOptions } from "./timezone"
 import { annotateTrades, routersToCheck } from "./annotate"
 import { assignSync, recordSync, swapKey, type SyncEvent } from "./reserves"
 import { EXAMPLE_URL, parseDextoolsUrl } from "./parse-url"
@@ -144,9 +144,10 @@ test("writes an excel-friendly csv", () => {
     fundedBy: "Disperse.app",
     fundedByAddress: "0xd152f549545093347a162dce210e7293f1452150",
   }
-  const csv = tradesToCsv(view, [trade])
+  const csv = tradesToCsv(view, [trade], "Asia/Seoul")
   assert.equal(csv.startsWith("\uFEFF"), true)
-  assert.match(csv, /date_utc,type,price_usd,total_usd/)
+  assert.match(csv, /date_utc,date_local,timezone,type,price_usd,total_usd/)
+  assert.match(csv, /2024-08-04T15:54:23\.000Z,2024-08-05 00:54:23,Asia\/Seoul,SELL/)
   assert.match(csv, /quote_amount,pool_base_after,pool_quote_after,maker/)
   assert.match(csv, /4\.45892281616295148,1234\.5,0\.0000099,0x591f/)
   assert.match(csv, /,40,bot;team,0x7a250d56/)
@@ -293,4 +294,17 @@ test("counts wallet transactions and tags bots and team wallets", () => {
   assert.deepEqual(out.map((trade) => trade.makerTxCount), [1, 2, 2, 1])
   assert.deepEqual(out.map((trade) => trade.makerTags), [["team"], [], ["bot"], ["team"]])
   assert.deepEqual(routersToCheck(trades, pool.address, 1), [router])
+})
+
+test("shows times in the chosen time zone", () => {
+  const iso = "2024-08-04T15:54:23.000Z"
+  assert.equal(formatTradeDate(iso), "Aug 4 24 15:54:23")
+  assert.equal(formatTradeDate(iso, "Asia/Seoul"), "Aug 5 24 00:54:23")
+  assert.equal(formatTradeDate(iso, "America/Los_Angeles"), "Aug 4 24 08:54:23")
+  assert.equal(formatZoned(iso, "Asia/Kolkata"), "2024-08-04 21:24:23")
+  assert.equal(zoneAbbreviation("UTC"), "UTC")
+  assert.equal(resolveZone("Not/AZone"), "UTC")
+  const options = zoneOptions()
+  assert.equal(options.some((option) => option.value === "Asia/Seoul"), true)
+  assert.match(options.find((option) => option.value === "Asia/Seoul")?.label ?? "", /^\(UTC\+09:00\) Asia\/Seoul$/)
 })

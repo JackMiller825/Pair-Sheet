@@ -14,15 +14,16 @@ import {
   formatPoolSize,
   formatIncome,
   formatTiny,
-  formatTradeDate,
   formatUsd,
   shortAddress,
   sumDecimals,
 } from "@/lib/format"
+import { AUTO_ZONE, detectZone, formatTradeDate, resolveZone, zoneAbbreviation, zoneOptions } from "@/lib/timezone"
 import { EXAMPLE_URL } from "@/lib/parse-url"
 import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 
 const MAX_TRADES = 20000
+const ZONE_KEY = "pairsheet.timezone"
 const PAGE_SIZES = [25, 50, 100, 250]
 const WALLET_BATCH = 12
 const WALLET_ROUTER_LIMIT = 120
@@ -114,6 +115,14 @@ export function Exporter() {
   const [sortDesc, setSortDesc] = useState(true)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(50)
+  const [zoneChoice, setZoneChoice] = useState<string>(() => {
+    if (typeof window === "undefined") return AUTO_ZONE
+    try {
+      return window.localStorage.getItem(ZONE_KEY) || AUTO_ZONE
+    } catch {
+      return AUTO_ZONE
+    }
+  })
   const [copied, setCopied] = useState(false)
   const [funding, setFunding] = useState<{ done: number; total: number } | null>(null)
   const run = useRef(0)
@@ -287,6 +296,20 @@ export function Exporter() {
     }
   }
 
+  const zone = resolveZone(zoneChoice)
+  const zoneName = zoneAbbreviation(zone)
+  const hasPool = pool !== null
+  const zones = useMemo(() => (hasPool ? zoneOptions() : []), [hasPool])
+
+  function changeZone(choice: string) {
+    setZoneChoice(choice)
+    try {
+      window.localStorage.setItem(ZONE_KEY, choice)
+    } catch {
+      return
+    }
+  }
+
   const trades = useMemo(
     () => annotateTrades(rawTrades, pool?.address ?? "", facts),
     [rawTrades, pool?.address, facts],
@@ -412,7 +435,7 @@ export function Exporter() {
 
   function download() {
     if (!pool || filtered.length === 0) return
-    const csv = tradesToCsv(pool, filtered)
+    const csv = tradesToCsv(pool, filtered, zone)
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
     const link = document.createElement("a")
     link.href = URL.createObjectURL(blob)
@@ -558,6 +581,22 @@ export function Exporter() {
               ))}
             </div>
             <label className="flex items-center gap-2 text-sm text-muted-foreground">
+              Time zone
+              <select
+                aria-label="Time zone"
+                value={zoneChoice}
+                onChange={(event) => changeZone(event.target.value)}
+                className="h-9 max-w-64 rounded-lg border border-input bg-background px-2 text-sm text-foreground"
+              >
+                <option value={AUTO_ZONE}>Local ({detectZone().replace(/_/g, " ")})</option>
+                {zones.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-muted-foreground">
               Funded by
               <select
                 aria-label="Filter by funded by"
@@ -688,7 +727,7 @@ export function Exporter() {
                         {sortKey === "selected" ? sortDesc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-50" />}
                       </button>
                     </th>
-                    <SortHeader label="Date (UTC)" column="timestamp" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
+                    <SortHeader label={`Date (${zoneName})`} column="timestamp" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Type" column="type" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Price (USD)" column="priceUsd" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label="Total" column="totalUsd" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
@@ -728,7 +767,7 @@ export function Exporter() {
                             onChange={() => toggleTrade(trade.id)}
                           />
                         </td>
-                        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatTradeDate(trade.timestamp)}</td>
+                        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{formatTradeDate(trade.timestamp, zone)}</td>
                         <td className="px-3 py-2">
                           <span className={`font-semibold ${TYPE_TONE[trade.type]}`}>
                             {trade.type}
@@ -886,7 +925,7 @@ export function Exporter() {
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes every row that matches the filters, not only the current page
-            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the file are UTC. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
+            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the table use the time zone selected above; the file has both the UTC time and the time in that zone. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (

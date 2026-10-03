@@ -127,18 +127,6 @@ function toSubscript(value: number): string {
     .join("")
 }
 
-export function formatTradeDate(iso: string): string {
-  const date = new Date(iso)
-  if (Number.isNaN(date.getTime())) return iso
-  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-  const day = date.getUTCDate()
-  const year = String(date.getUTCFullYear()).slice(2)
-  const hours = String(date.getUTCHours()).padStart(2, "0")
-  const minutes = String(date.getUTCMinutes()).padStart(2, "0")
-  const seconds = String(date.getUTCSeconds()).padStart(2, "0")
-  return `${months[date.getUTCMonth()]} ${day} ${year} ${hours}:${minutes}:${seconds}`
-}
-
 export function shortAddress(address: string): string {
   if (address.length < 12) return address || "—"
   return `${address.slice(0, 6)}…${address.slice(-4)}`

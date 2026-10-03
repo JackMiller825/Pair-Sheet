@@ -1,7 +1,10 @@
+import { formatZoned } from "./timezone"
 import type { PoolView, Trade } from "./types"
 
 const HEADERS = [
   "date_utc",
+  "date_local",
+  "timezone",
   "type",
   "price_usd",
   "total_usd",
@@ -32,12 +35,14 @@ function escapeCell(value: string | number | null | undefined): string {
   return text
 }
 
-export function tradesToCsv(pool: PoolView, trades: Trade[]): string {
+export function tradesToCsv(pool: PoolView, trades: Trade[], timeZone = "UTC"): string {
   const lines = [HEADERS.join(",")]
   for (const trade of trades) {
     lines.push(
       [
         trade.timestamp,
+        formatZoned(trade.timestamp, timeZone),
+        timeZone,
         trade.type,
         trade.priceUsd,
         trade.totalUsd,
