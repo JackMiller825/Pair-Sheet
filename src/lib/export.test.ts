@@ -3,6 +3,7 @@ import test from "node:test"
 import { csvFilename, tradesToCsv } from "./csv"
 import { SWAP_V2_TOPIC, decodeAbiString, decodeV2, decodeV3 } from "./decode"
 import {
+  formatPoolSize,
   formatTiny,
   formatTradeDate,
   priceInQuote,
@@ -216,4 +217,10 @@ test("reads the pool size from the Sync event right before each swap", () => {
   const direct = new Map()
   assignSync({ ...pool, token0: pool.base.address, token1: pool.quote.address }, [swap(206)], byTx, direct)
   assert.deepEqual(direct.get(swapKey(swap(206))), { base: "5", quote: "2" })
+})
+
+test("keeps significant digits for tiny pool sizes", () => {
+  assert.equal(formatPoolSize("0.000009890697146748"), "0.00000989")
+  assert.equal(formatPoolSize("4.458932706860098228"), "4.4589")
+  assert.equal(formatPoolSize("0"), "0")
 })

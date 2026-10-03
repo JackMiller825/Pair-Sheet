@@ -78,6 +78,14 @@ export function formatGroupedAmount(amount: string): string {
   return negative ? `-${shown}` : shown
 }
 
+export function formatPoolSize(amount: string): string {
+  const [whole, fraction = ""] = amount.split(".")
+  if (whole !== "0" || !fraction) return formatGroupedAmount(amount)
+  const zeros = fraction.length - fraction.replace(/^0+/, "").length
+  const trimmed = fraction.slice(0, zeros + 4).replace(/0+$/, "")
+  return trimmed ? `0.${trimmed}` : "0"
+}
+
 export function formatUsd(amount: string | null): string {
   if (!amount) return "—"
   const value = Number(amount)

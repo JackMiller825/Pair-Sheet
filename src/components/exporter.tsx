@@ -10,6 +10,7 @@ import { csvFilename, tradesToCsv } from "@/lib/csv"
 import {
   compareDecimal,
   formatGroupedAmount,
+  formatPoolSize,
   formatIncome,
   formatTiny,
   formatTradeDate,
@@ -608,10 +609,10 @@ export function Exporter() {
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.baseAmount)}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.quoteAmount)}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs" title={trade.baseReserve ?? "Pool size unavailable"}>
-                          {trade.baseReserve ? formatGroupedAmount(trade.baseReserve) : "—"}
+                          {trade.baseReserve ? formatPoolSize(trade.baseReserve) : "—"}
                         </td>
                         <td className="px-3 py-2 text-right font-mono text-xs" title={trade.quoteReserve ?? "Pool size unavailable"}>
-                          {trade.quoteReserve ? formatGroupedAmount(trade.quoteReserve) : "—"}
+                          {trade.quoteReserve ? formatPoolSize(trade.quoteReserve) : "—"}
                         </td>
                         <td className="px-3 py-2">
                           {trade.maker ? (
