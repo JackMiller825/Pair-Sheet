@@ -100,6 +100,83 @@ export function formatUsd(amount: string | null): string {
   return `$${formatTiny(value)}`
 }
 
+// Dollar amounts on the maker panel. Negatives render as -$10.83.
+// Amounts of $1,000,000 and up use the compact form so the column stays narrow.
+export function formatPanelUsd(amount: string | null): string {
+  if (amount === null) return "—"
+  const trimmed = amount.trim()
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return "—"
+  const negative = trimmed.startsWith("-")
+  const abs = Number(negative ? trimmed.slice(1) : trimmed)
+  if (!Number.isFinite(abs)) return "—"
+  if (abs >= 1_000_000) return formatCompactUsd(trimmed)
+  const body = formatUsd(negative ? trimmed.slice(1) : trimmed)
+  if (body === "—" || body === "$0") return body
+  return negative ? `-${body}` : body
+}
+
+export function formatCompact(amount: string): string {
+  const trimmed = amount.trim()
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return "—"
+  const negative = trimmed.startsWith("-")
+  const value = Number(trimmed)
+  if (!Number.isFinite(value)) return "—"
+  const abs = Math.abs(value)
+  const sign = negative && abs !== 0 ? "-" : ""
+  if (abs === 0) return "0"
+  const compact = compactMagnitude(abs)
+  if (compact) return sign + compact
+  if (abs >= 1) {
+    return sign + abs.toLocaleString("en-US", { maximumFractionDigits: 2 })
+  }
+  if (abs >= 0.0001) {
+    return sign + abs.toLocaleString("en-US", { maximumSignificantDigits: 4 })
+  }
+  return formatTiny(value)
+}
+
+export function formatCompactUsd(amount: string | null): string {
+  if (amount === null) return "—"
+  const compact = formatCompact(amount)
+  if (compact === "—") return "—"
+  if (compact === "0") return "$0"
+  if (compact.startsWith("-")) return `-$${compact.slice(1)}`
+  return `$${compact}`
+}
+
+// Quote-token amounts (WETH and similar) stay precise below 1,000.
+export function formatQuoteAmount(amount: string): string {
+  const trimmed = amount.trim()
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return "—"
+  const value = Number(trimmed)
+  if (!Number.isFinite(value)) return "—"
+  const abs = Math.abs(value)
+  if (abs >= 1000) return formatCompact(trimmed)
+  if (abs === 0) return "0"
+  if (abs < 0.0001) return formatTiny(value)
+  const digits = abs >= 1 ? 4 : 6
+  const text = abs.toLocaleString("en-US", { maximumFractionDigits: digits })
+  return value < 0 ? `-${text}` : text
+}
+
+function compactMagnitude(abs: number): string | null {
+  const units = [
+    { value: 1e12, suffix: "T" },
+    { value: 1e9, suffix: "B" },
+    { value: 1e6, suffix: "M" },
+    { value: 1e3, suffix: "K" },
+  ]
+  for (const unit of units) {
+    if (abs >= unit.value) {
+      const scaled = abs / unit.value
+      const text = scaled >= 100 ? scaled.toFixed(1) : scaled.toFixed(2)
+      const trimmed = text.replace(/\.0+$/, "").replace(/(\.\d)0$/, "$1")
+      return `${trimmed}${unit.suffix}`
+    }
+  }
+  return null
+}
+
 export function formatTiny(value: number, digits = 4): string {
   if (!Number.isFinite(value)) return "—"
   const sign = value < 0 ? "-" : ""
@@ -165,6 +242,39 @@ export function sumDecimals(values: string[]): string {
     total += part.negative ? -scaled : scaled
   }
   return formatScaled(total, places)
+}
+
+export function mulDecimals(left: string, right: string): string | null {
+  const a = splitDecimal(left)
+  const b = splitDecimal(right)
+  if (!a || !b) return null
+  const product = a.scaled * b.scaled
+  const signed = a.negative === b.negative || product === 0n ? product : -product
+  return formatScaled(signed, a.places + b.places)
+}
+
+// part / whole, clamped to 0–1. Used for the remaining-balance bar.
+export function decimalRatio(part: string, whole: string): number {
+  const p = splitDecimal(part)
+  const w = splitDecimal(whole)
+  if (!p || !w || p.negative || w.negative) return 0
+  const places = Math.max(p.places, w.places)
+  const pScaled = p.scaled * 10n ** BigInt(places - p.places)
+  const wScaled = w.scaled * 10n ** BigInt(places - w.places)
+  if (wScaled === 0n || pScaled === 0n) return 0
+  const ratio = (pScaled * 10000n) / wScaled
+  return Math.min(1, Number(ratio) / 10000)
+}
+
+function splitDecimal(value: string): { negative: boolean; scaled: bigint; places: number } | null {
+  const match = value.trim().match(/^(-?)(\d+)(?:\.(\d+))?$/)
+  if (!match) return null
+  const fraction = match[3] ?? ""
+  return {
+    negative: match[1] === "-",
+    scaled: BigInt(match[2] + fraction),
+    places: fraction.length,
+  }
 }
 
 export function formatIncome(amount: string, places = 6): string {

@@ -1,3 +1,4 @@
+import { hexToUtf8 } from "./bytes"
 import type { PoolContext, RawLog, Side } from "./types"
 
 export const SWAP_V2_TOPIC =
@@ -140,11 +141,11 @@ export function decodeAbiString(hex: string): string {
   const clean = hex.startsWith("0x") ? hex.slice(2) : hex
   if (!clean || /^0+$/.test(clean)) return ""
   if (clean.length === 64) {
-    return Buffer.from(clean, "hex").toString("utf8").replace(/\0+$/g, "")
+    return hexToUtf8(clean)
   }
   const offsetBytes = Number(BigInt(`0x${clean.slice(0, 64)}`))
   const start = offsetBytes * 2
   const length = Number(BigInt(`0x${clean.slice(start, start + 64)}`))
   const data = clean.slice(start + 64, start + 64 + length * 2)
-  return Buffer.from(data, "hex").toString("utf8").replace(/\0+$/g, "")
+  return hexToUtf8(data)
 }

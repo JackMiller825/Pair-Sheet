@@ -2,10 +2,15 @@
 
 import { useMemo, useRef, useState } from "react"
 import { ArrowDown, ArrowUp, ArrowUpDown, Bot, Calculator, ChevronLeft, ChevronRight, Download, ExternalLink, Loader2, Users, X } from "lucide-react"
+import { MakerCountButton } from "@/components/maker-summary"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { supportedChainNames } from "@/lib/chains"
+import { getChain, supportedChainNames } from "@/lib/chains"
+import { resolveFunders } from "@/lib/funded"
+import { getSwapPage } from "@/lib/history"
+import { AppError } from "@/lib/http"
+import { lookUpWallets } from "@/lib/wallets"
 import { EMPTY_FACTS, annotateTrades, routersToCheck, type WalletFacts } from "@/lib/annotate"
 import { csvFilename, tradesToCsv } from "@/lib/csv"
 import {
@@ -18,8 +23,8 @@ import {
   shortAddress,
   sumDecimals,
 } from "@/lib/format"
+import { latestQuotePrice, summarizeMakers } from "@/lib/maker"
 import { AUTO_ZONE, detectZone, formatTradeDate, resolveZone, zoneAbbreviation, zoneOptions } from "@/lib/timezone"
-import { EXAMPLE_URL } from "@/lib/parse-url"
 import type { PoolView, SwapsResponse, Trade } from "@/lib/types"
 
 const MAX_TRADES = 20000
@@ -51,6 +56,7 @@ type SortKey =
   | "baseReserve"
   | "quoteReserve"
   | "maker"
+  | "makerTxCount"
   | "fundedBy"
 
 const CHAINS = supportedChainNames().join(", ")
@@ -72,26 +78,6 @@ type Income = {
   usd: string | null
 }
 
-type WalletAnswer = {
-  contracts?: WalletFacts["contracts"]
-  deployer?: string | null
-  failed?: string[]
-}
-
-type FunderMap = Record<string, { address: string; label: string }>
-
-async function readJson<T>(response: Response, fallback: string): Promise<T & { error?: string }> {
-  const text = await response.text()
-  try {
-    return JSON.parse(text) as T & { error?: string }
-  } catch {
-    if (response.status === 504 || response.status === 408) {
-      throw new Error("The server took too long to answer. Try again in a moment.")
-    }
-    throw new Error(`${fallback} The server answered with status ${response.status}.`)
-  }
-}
-
 function chunk<T>(items: T[], size: number): T[][] {
   const groups: T[][] = []
   for (let index = 0; index < items.length; index += size) groups.push(items.slice(index, index + size))
@@ -99,7 +85,7 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 export function Exporter() {
-  const [url, setUrl] = useState(EXAMPLE_URL)
+  const [url, setUrl] = useState("")
   const [phase, setPhase] = useState<Phase>("idle")
   const [error, setError] = useState<string | null>(null)
   const [warning, setWarning] = useState<string | null>(null)
@@ -130,6 +116,8 @@ export function Exporter() {
   const [income, setIncome] = useState<Income | null>(null)
 
   async function lookUpWalletFacts(chainId: string, view: PoolView, loaded: Trade[], token: number) {
+    const chain = getChain(chainId)
+    if (!chain) return
     const routers = routersToCheck(loaded, view.address, WALLET_ROUTER_LIMIT)
     const batches = chunk(routers, WALLET_BATCH)
     if (batches.length === 0) batches.push([])
@@ -140,16 +128,10 @@ export function Exporter() {
         next += 1
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
-            const response: Response = await fetch("/api/wallets", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ chain: chainId, addresses: batches[index], token: index === 0 ? view.baseAddress : null }),
-            })
-            const body = await readJson<WalletAnswer>(response, "Could not look up wallets.")
-            if (!response.ok) throw new Error(body.error || "Could not look up wallets.")
+            const body = await lookUpWallets(chain, batches[index], index === 0 ? view.baseAddress : null)
             if (run.current !== token) return
             setFacts((current) => ({
-              contracts: { ...current.contracts, ...(body.contracts ?? {}) },
+              contracts: { ...current.contracts, ...body.contracts },
               deployer: body.deployer ?? current.deployer,
             }))
             break
@@ -163,6 +145,8 @@ export function Exporter() {
   }
 
   async function lookUpFunders(chainId: string, makers: string[], token: number) {
+    const chain = getChain(chainId)
+    if (!chain) return
     let pending = [...new Set(makers.map((maker) => maker.toLowerCase()).filter(Boolean))]
     const total = pending.length
     let done = 0
@@ -179,26 +163,19 @@ export function Exporter() {
           const batch = batches[next]
           next += 1
           try {
-            const response: Response = await fetch("/api/funders", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ chain: chainId, makers: batch }),
-            })
-            const body = await readJson<{ funders?: FunderMap; failed?: string[] }>(response, "Could not look up funders.")
-            if (!response.ok) throw new Error(body.error || "Could not look up funders.")
-            const found = body.funders ?? {}
-            const failed = new Set(body.failed ?? [])
+            const { found, failed } = await resolveFunders(chain, batch, Date.now() + 45000)
+            const missed = new Set(failed)
             if (run.current !== token) return
             setTrades((current) =>
               current.map((trade) => {
-                const match = found[trade.maker.toLowerCase()]
+                const match = found.get(trade.maker.toLowerCase())
                 return match && !trade.fundedByAddress
                   ? { ...trade, fundedBy: match.label, fundedByAddress: match.address }
                   : trade
               }),
             )
             for (const maker of batch) {
-              if (failed.has(maker)) retry.push(maker)
+              if (missed.has(maker)) retry.push(maker)
               else done += 1
             }
           } catch {
@@ -238,26 +215,17 @@ export function Exporter() {
       let chainId = ""
       let poolView: PoolView | null = null
       do {
-        let body: SwapsResponse & { error?: string } | null = null
+        let body: SwapsResponse | null = null
         let failure = "Could not load swaps."
         for (let attempt = 0; attempt < PAGE_ATTEMPTS && !body; attempt += 1) {
           if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt))
           try {
-            const response: Response = await fetch("/api/swaps", {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ url: trimmed, cursor }),
-            })
-            const parsed: SwapsResponse & { error?: string } = await readJson<SwapsResponse>(response, "Could not load swaps.")
+            body = await getSwapPage(trimmed, cursor)
             if (run.current !== token) return
-            if (response.ok) body = parsed
-            else {
-              failure = parsed.error || `Could not load swaps. The server answered with status ${response.status}.`
-              if (response.status < 500) break
-            }
           } catch (requestError) {
             if (run.current !== token) return
             failure = requestError instanceof Error ? requestError.message : failure
+            if (requestError instanceof AppError && requestError.status < 500) break
           }
         }
         if (!body) throw new Error(failure)
@@ -314,6 +282,8 @@ export function Exporter() {
     () => annotateTrades(rawTrades, pool?.address ?? "", facts),
     [rawTrades, pool?.address, facts],
   )
+  const makerSummaries = useMemo(() => summarizeMakers(trades), [trades])
+  const quotePrice = useMemo(() => latestQuotePrice(trades), [trades])
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -337,6 +307,10 @@ export function Exporter() {
       }
       if (sortKey === "others") {
         return (tagWeight(a) - tagWeight(b)) * direction || compareTrades(b, a, "timestamp")
+      }
+      if (sortKey === "makerTxCount") {
+        const diff = a.makerTxCount - b.makerTxCount
+        return diff * direction || a.maker.localeCompare(b.maker) || compareTrades(b, a, "timestamp")
       }
       const missingA = isMissing(a, sortKey)
       const missingB = isMissing(b, sortKey)
@@ -483,14 +457,14 @@ export function Exporter() {
             id="pair-url"
             value={url}
             onChange={(event) => setUrl(event.target.value)}
-            placeholder={EXAMPLE_URL}
+            placeholder="https://www.dextools.io/app/ether/pair-explorer/0x…"
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
             className="h-11 flex-1 font-mono text-sm"
             aria-invalid={phase === "error"}
           />
-          <Button type="submit" size="lg" className="h-11 px-4" disabled={phase === "loading"}>
+          <Button type="submit" size="lg" className="h-11 px-4" disabled={phase === "loading" || url.trim() === ""}>
             {phase === "loading" ? <Loader2 className="animate-spin" /> : null}
             {phase === "loading" ? "Reading chain" : "Load swaps"}
           </Button>
@@ -736,7 +710,23 @@ export function Exporter() {
                     <SortHeader label={pool.quoteSymbol} column="quoteAmount" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label={`Pool ${pool.baseSymbol}`} column="baseReserve" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
                     <SortHeader label={`Pool ${pool.quoteSymbol}`} column="quoteReserve" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} align="right" />
-                    <SortHeader label="Maker" column="maker" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
+                    <th
+                      className="px-3 py-2 font-medium text-left"
+                      aria-sort={
+                        sortKey === "maker" || sortKey === "makerTxCount" ? (sortDesc ? "descending" : "ascending") : "none"
+                      }
+                    >
+                      <span className="inline-flex items-center gap-3">
+                        <SortButton label="Maker" column="maker" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
+                        <SortButton
+                          label="Txns"
+                          column="makerTxCount"
+                          sortKey={sortKey}
+                          desc={sortDesc}
+                          onSort={toggleSort}
+                        />
+                      </span>
+                    </th>
                     <SortHeader label="Funded by" column="fundedBy" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                     <SortHeader label="Others" column="others" sortKey={sortKey} desc={sortDesc} onSort={toggleSort} />
                   </tr>
@@ -795,18 +785,20 @@ export function Exporter() {
                               >
                                 {shortAddress(trade.maker)}
                               </a>
-                              <button
-                                type="button"
-                                className="ml-2 rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-foreground hover:bg-accent"
-                                title={`${trade.makerTxCount.toLocaleString("en-US")} transaction${trade.makerTxCount === 1 ? "" : "s"} by this wallet in this pool. Click to show only this wallet.`}
-                                aria-label={`Show only the ${trade.makerTxCount} transactions by ${trade.maker}`}
-                                onClick={() => {
+                              <MakerCountButton
+                                maker={trade.maker}
+                                count={trade.makerTxCount}
+                                summary={makerSummaries.get(trade.maker.toLowerCase()) ?? null}
+                                baseSymbol={pool.baseSymbol}
+                                quoteSymbol={pool.quoteSymbol}
+                                priceUsd={pool.priceUsd}
+                                priceQuote={quotePrice}
+                                partial={capped}
+                                onFilter={() => {
                                   setQuery(trade.maker)
                                   setPage(0)
                                 }}
-                              >
-                                {trade.makerTxCount.toLocaleString("en-US")}
-                              </button>
+                              />
                             </>
                           ) : (
                             "—"
@@ -925,7 +917,7 @@ export function Exporter() {
           <p className="text-xs leading-5 text-muted-foreground">
             Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
             The CSV includes every row that matches the filters, not only the current page
-            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the table use the time zone selected above; the file has both the UTC time and the time in that zone. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
+            {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the table use the time zone selected above; the file has both the UTC time and the time in that zone. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. Hover it for that wallet’s buys, sells, realized PnL, and tokens still held, in USD, the quote token, and the base token. Click it to show only that wallet. Maker sorts that column by address, and Txns sorts it by the number. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>
         </section>
       ) : phase === "idle" || phase === "error" ? (
@@ -981,7 +973,7 @@ function tagWeight(trade: Trade): number {
 }
 
 function isMissing(trade: Trade, key: SortKey): boolean {
-  if (key === "selected" || key === "others") return false
+  if (key === "selected" || key === "others" || key === "makerTxCount") return false
   if (key === "fundedBy") return !trade.fundedBy
   if (key === "maker") return !trade.maker
   if (key === "timestamp" || key === "type") return false
@@ -993,6 +985,7 @@ function compareTrades(a: Trade, b: Trade, key: SortKey): number {
   if (key === "type" || key === "maker") return a[key].localeCompare(b[key])
   if (key === "fundedBy") return (a.fundedBy || "").localeCompare(b.fundedBy || "")
   if (key === "selected" || key === "others") return 0
+  if (key === "makerTxCount") return a.makerTxCount - b.makerTxCount
   return compareDecimal(a[key] ?? "0", b[key] ?? "0")
 }
 
@@ -1017,11 +1010,37 @@ function SortHeader({
       className={`px-3 py-2 font-medium ${align === "right" ? "text-right" : "text-left"}`}
       aria-sort={active ? (desc ? "descending" : "ascending") : "none"}
     >
-      <button type="button" className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`} onClick={() => onSort(column)}>
-        {label}
-        {active ? desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-40" />}
-      </button>
+      <SortButton label={label} column={column} sortKey={sortKey} desc={desc} onSort={onSort} align={align} />
     </th>
+  )
+}
+
+function SortButton({
+  label,
+  column,
+  sortKey,
+  desc,
+  onSort,
+  align = "left",
+}: {
+  label: string
+  column: SortKey
+  sortKey: SortKey
+  desc: boolean
+  onSort: (column: SortKey) => void
+  align?: "left" | "right"
+}) {
+  const active = sortKey === column
+  return (
+    <button
+      type="button"
+      className={`inline-flex items-center gap-1 ${align === "right" ? "flex-row-reverse" : ""}`}
+      aria-label={column === "makerTxCount" ? "Sort by maker transaction count" : undefined}
+      onClick={() => onSort(column)}
+    >
+      {label}
+      {active ? desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" /> : <ArrowUpDown className="size-3 opacity-40" />}
+    </button>
   )
 }
 

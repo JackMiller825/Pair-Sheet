@@ -1,3 +1,4 @@
+import { decodeBase64Url, encodeBase64Url } from "./bytes"
 import { chainCanExport, type ChainConfig } from "./chains"
 import { decodeSwap, liquidityTopics, topicOrder } from "./decode"
 import { formatUnits, priceInQuote, priceUsdFromTotal, totalUsd } from "./format"
@@ -377,12 +378,12 @@ async function fillFromBlockscout(host: string, hashes: string[], makers: Map<st
 }
 
 function encodeCursor(cursor: ServerCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url")
+  return encodeBase64Url(JSON.stringify(cursor))
 }
 
 function decodeCursor(value: string): ServerCursor {
   try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as ServerCursor
+    const parsed = JSON.parse(decodeBase64Url(value)) as ServerCursor
     if (!parsed?.pool?.address || !parsed.topic || !parsed.source) {
       throw new Error("incomplete")
     }
