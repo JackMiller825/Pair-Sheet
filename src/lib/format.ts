@@ -65,6 +65,18 @@ export function priceUsdFromTotal(total: string, baseAmount: string): string | n
   return price.toFixed(18).replace(/0+$/, "").replace(/\.$/, "")
 }
 
+// Whole tokens for the base-token column. Half amounts round away from zero.
+export function formatIntegerAmount(amount: string): string {
+  const trimmed = amount.trim()
+  if (!/^-?\d+(\.\d+)?$/.test(trimmed)) return "—"
+  const negative = trimmed.startsWith("-")
+  const [whole, fraction = ""] = trimmed.slice(negative ? 1 : 0).split(".")
+  let value = BigInt(whole)
+  if (fraction[0] !== undefined && fraction[0] >= "5") value += 1n
+  const grouped = value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return negative && value !== 0n ? `-${grouped}` : grouped
+}
+
 export function formatGroupedAmount(amount: string): string {
   const negative = amount.startsWith("-")
   const [whole, fraction = ""] = amount.replace("-", "").split(".")

@@ -16,6 +16,7 @@ import { csvFilename, tradesToCsv } from "@/lib/csv"
 import {
   compareDecimal,
   formatGroupedAmount,
+  formatIntegerAmount,
   formatPoolSize,
   formatIncome,
   formatTiny,
@@ -766,7 +767,9 @@ export function Exporter() {
                         <td className="px-3 py-2 text-right font-mono text-xs">{trade.priceUsd ? `$${formatTiny(Number(trade.priceUsd))}` : "—"}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatUsd(trade.totalUsd)}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{trade.priceQuote ? formatTiny(Number(trade.priceQuote)) : "—"}</td>
-                        <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.baseAmount)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-xs" title={formatGroupedAmount(trade.baseAmount)}>
+                          {formatIntegerAmount(trade.baseAmount)}
+                        </td>
                         <td className="px-3 py-2 text-right font-mono text-xs">{formatGroupedAmount(trade.quoteAmount)}</td>
                         <td className="px-3 py-2 text-right font-mono text-xs" title={trade.baseReserve ?? "Pool size unavailable"}>
                           {trade.baseReserve ? formatPoolSize(trade.baseReserve) : "—"}
@@ -915,7 +918,7 @@ export function Exporter() {
             </div>
           </nav>
           <p className="text-xs leading-5 text-muted-foreground">
-            Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama.
+            Amounts come from the pool’s on-chain Swap, Mint (ADD) and Burn (REMOVE) events; for ADD and REMOVE the two amounts are the tokens deposited or withdrawn and Total is the quote-token side in USD. USD totals multiply the quote token by its historical price from DefiLlama. The {pool.baseSymbol} column is a whole number of tokens; hover a cell for the exact amount. The CSV keeps the full on-chain value.
             The CSV includes every row that matches the filters, not only the current page
             {filter !== "ALL" || funder || query.trim() ? " after filters" : ""}. Dates in the table use the time zone selected above; the file has both the UTC time and the time in that zone. Pool columns show how much of each token the pool held right after that swap (hover for the exact value); for Uniswap V3 style pools this is the balance at the end of the swap’s block. The number next to a maker is how many transactions that wallet made in this pool. Hover it for that wallet’s buys, sells, realized PnL, and tokens still held, in USD, the quote token, and the base token. Click it to show only that wallet. Maker sorts that column by address, and Txns sorts it by the number. The Bot icon marks transactions sent straight to the pool or through a contract with unpublished source; the Team icon marks the token deployer and the wallet that added the first liquidity. Funded by is the address that first sent native currency to the maker. Each maker and transaction links to the explorer. Supported chains: {CHAINS}.
           </p>

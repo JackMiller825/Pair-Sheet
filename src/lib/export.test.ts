@@ -3,6 +3,7 @@ import test from "node:test"
 import { csvFilename, tradesToCsv } from "./csv"
 import { BURN_V3_TOPIC, MINT_V2_TOPIC, SWAP_V2_TOPIC, decodeAbiString, decodeSwap, decodeV2, decodeV3, liquidityTopics } from "./decode"
 import {
+  formatIntegerAmount,
   formatPoolSize,
   formatTiny,
   priceInQuote,
@@ -99,6 +100,14 @@ test("decodes a token symbol from ABI data", () => {
   const hex =
     "0x0000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000000446574f4700000000000000000000000000000000000000000000000000000000"
   assert.equal(decodeAbiString(hex), "FWOG")
+})
+
+test("shows the base token column as a whole number", () => {
+  assert.equal(formatIntegerAmount("16829.0324"), "16,829")
+  assert.equal(formatIntegerAmount("16829.5"), "16,830")
+  assert.equal(formatIntegerAmount("100000000000000"), "100,000,000,000,000")
+  assert.equal(formatIntegerAmount("0.4"), "0")
+  assert.equal(formatIntegerAmount("-1.6"), "-2")
 })
 
 test("formats tiny prices with subscript zeros", () => {
